@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Shield, Calendar, Target, Trophy, Save, CheckCircle, AlertTriangle, Plus, Trash2, Layers, Users, ImageIcon, UserPlus, Star } from 'lucide-react';
+import { Shield, Calendar, Target, Trophy, Save, CheckCircle, AlertTriangle, Plus, Trash2, Layers, Users, ImageIcon, UserPlus, Star, Clock3, Globe2 } from 'lucide-react';
 import { adminApi, CreateMatchdayRequest, CreateFixtureRequest, UpdateResultRequest, CreateDivisionRequest, CreateTeamRequest, AdminPredictionInput } from '../api/adminApi';
 import { matchdayApi } from '../api/matchdayApi';
 import { fixtureApi } from '../api/fixtureApi';
@@ -21,16 +21,68 @@ type AdminTab = 'divisions' | 'teams' | 'matchdays' | 'fixtures' | 'results' | '
 
 const clampScore = (value: number) => Math.max(0, Math.min(99, Number.isFinite(value) ? value : 0));
 
+const toUtcIsoString = (localDateTime: string) => new Date(localDateTime).toISOString();
+
+const toLocalDateTimeInput = (isoDateTime?: string) => {
+  if (!isoDateTime) return '';
+  const date = new Date(isoDateTime);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
+
+const DateTimeField: React.FC<{
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}> = ({ id, label, value, onChange, required }) => {
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local time';
+  const preview = value && !Number.isNaN(new Date(value).getTime())
+    ? new Intl.DateTimeFormat(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZoneName: 'short',
+      }).format(new Date(value))
+    : null;
+
+  return (
+    <div className="space-y-2 rounded-2xl border border-white/60 bg-white/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label htmlFor={id}>{label}</Label>
+        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-700">
+          <Globe2 className="h-3 w-3" /> {timeZone}
+        </span>
+      </div>
+      <Input
+        id={id}
+        type="datetime-local"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+      />
+      <p className="flex items-center gap-1 text-xs text-muted-foreground">
+        <Clock3 className="h-3 w-3" />
+        {preview || 'Choose a date and time in your current timezone.'}
+      </p>
+    </div>
+  );
+};
+
 const AdminScoreStepper: React.FC<{
   label: string;
   value?: number;
   onChange: (value: number) => void;
-}> = ({ label, value, onChange }) => {
+  disabled?: boolean;
+}> = ({ label, value, onChange, disabled = false }) => {
   const currentValue = value ?? 0;
   return (
     <div className="prediction-stepper">
       <span className="sr-only">{label}</span>
-      <button type="button" aria-label={`Decrease ${label}`} onClick={() => onChange(clampScore(currentValue - 1))}>
+      <button type="button" disabled={disabled} aria-label={`Decrease ${label}`} onClick={() => onChange(clampScore(currentValue - 1))}>
         -
       </button>
       <input
@@ -39,9 +91,10 @@ const AdminScoreStepper: React.FC<{
         max={99}
         value={value ?? ''}
         placeholder="0"
+        disabled={disabled}
         onChange={(event) => onChange(clampScore(Number.parseInt(event.target.value || '0', 10)))}
       />
-      <button type="button" aria-label={`Increase ${label}`} onClick={() => onChange(clampScore(currentValue + 1))}>
+      <button type="button" disabled={disabled} aria-label={`Increase ${label}`} onClick={() => onChange(clampScore(currentValue + 1))}>
         +
       </button>
     </div>
@@ -154,6 +207,9 @@ const AdminPage: React.FC = () => {
     queryFn: () => matchdayApi.getMatchdaysByDivision(selectedLeague!.division.id),
     enabled: !!selectedLeague?.division?.id,
   });
+
+  const selectedLeagueMatchday = leagueMatchdays?.find((matchday) => matchday.id === selectedLeagueMatchdayId);
+  const adminPredictionsLocked = !!selectedLeagueMatchday && !selectedLeagueMatchday.predictionsOpen;
 
   const { data: leagueFixtures } = useQuery({
     queryKey: ['leagueFixtures', selectedLeagueMatchdayId],
@@ -586,18 +642,12 @@ const AdminPage: React.FC = () => {
       return;
     }
     
-    // Convert local datetime to ISO UTC format
-    const toUTCISOString = (localDatetime: string) => {
-      const date = new Date(localDatetime);
-      return date.toISOString();
-    };
-    
     const request: CreateMatchdayRequest = {
       name: matchdayForm.name,
       number: matchdayForm.number,
       divisionId: selectedDivisionId,
-      startDate: toUTCISOString(matchdayForm.startDate),
-      endDate: matchdayForm.endDate ? toUTCISOString(matchdayForm.endDate) : undefined,
+      startDate: toUtcIsoString(matchdayForm.startDate),
+      endDate: matchdayForm.endDate ? toUtcIsoString(matchdayForm.endDate) : undefined,
     };
     createMatchdayMutation.mutate(request);
   };
@@ -718,6 +768,10 @@ const AdminPage: React.FC = () => {
   };
 
   const handleSaveMemberPredictions = () => {
+    if (adminPredictionsLocked) {
+      setError('Predictions are closed for this matchday and can no longer be added or edited.');
+      return;
+    }
     if (!leagueFixtures || leagueFixtures.length === 0) {
       setError('No fixtures found for this matchday');
       return;
@@ -1255,25 +1309,19 @@ const AdminPage: React.FC = () => {
                       </div>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label htmlFor="startDate">Start Date & Time</Label>
-                        <Input
-                          id="startDate"
-                          type="datetime-local"
-                          value={matchdayForm.startDate}
-                          onChange={(e) => setMatchdayForm({ ...matchdayForm, startDate: e.target.value })}
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="endDate">End Date & Time (Optional)</Label>
-                        <Input
-                          id="endDate"
-                          type="datetime-local"
-                          value={matchdayForm.endDate}
-                          onChange={(e) => setMatchdayForm({ ...matchdayForm, endDate: e.target.value })}
-                        />
-                      </div>
+                      <DateTimeField
+                        id="startDate"
+                        label="Gameweek starts"
+                        value={matchdayForm.startDate}
+                        onChange={(startDate) => setMatchdayForm({ ...matchdayForm, startDate })}
+                        required
+                      />
+                      <DateTimeField
+                        id="endDate"
+                        label="Prediction deadline (optional)"
+                        value={matchdayForm.endDate}
+                        onChange={(endDate) => setMatchdayForm({ ...matchdayForm, endDate })}
+                      />
                     </div>
                     <Button
                       type="submit"
@@ -1459,15 +1507,12 @@ const AdminPage: React.FC = () => {
                               </SelectContent>
                             </Select>
                           </div>
-                          <div className="space-y-2">
-                            <Label htmlFor="fixtureKickoff">Fixture date/time</Label>
-                            <Input
-                              id="fixtureKickoff"
-                              type="datetime-local"
-                              value={fixtureForm.kickoffAt}
-                              onChange={(event) => setFixtureForm({ ...fixtureForm, kickoffAt: event.target.value })}
-                            />
-                          </div>
+                          <DateTimeField
+                            id="fixtureKickoff"
+                            label="Fixture kickoff"
+                            value={fixtureForm.kickoffAt}
+                            onChange={(kickoffAt) => setFixtureForm({ ...fixtureForm, kickoffAt })}
+                          />
                           <div className="space-y-2">
                             <Label htmlFor="fixtureOrder">Order</Label>
                             <Input
@@ -1541,10 +1586,11 @@ const AdminPage: React.FC = () => {
                               <Input
                                 type="datetime-local"
                                 className="w-full sm:w-56"
-                                value={fixture.kickoffAt ? new Date(fixture.kickoffAt).toISOString().slice(0, 16) : ''}
+                                title={`Displayed in ${Intl.DateTimeFormat().resolvedOptions().timeZone}`}
+                                value={toLocalDateTimeInput(fixture.kickoffAt)}
                                 onChange={(event) => updateFixtureMetadataMutation.mutate({
                                   fixtureId: fixture.id,
-                                  request: { kickoffAt: event.target.value ? new Date(event.target.value).toISOString() : null },
+                                  request: { kickoffAt: event.target.value ? toUtcIsoString(event.target.value) : null },
                                 })}
                               />
                               <Button type="button" variant="outline" size="sm" onClick={() => moveFixture(fixture.id, -1)} disabled={index === 0 || reorderFixturesMutation.isPending}>
@@ -1876,6 +1922,15 @@ const AdminPage: React.FC = () => {
                       <p className="text-muted-foreground">Select a league, member, and matchday first.</p>
                     ) : leagueFixtures && leagueFixtures.length > 0 ? (
                       <div className="space-y-4">
+                        {adminPredictionsLocked && (
+                          <div className="flex items-start gap-3 rounded-2xl border border-amber-300/70 bg-amber-50/80 p-4 text-amber-900">
+                            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                            <div>
+                              <p className="font-bold">Predictions are closed</p>
+                              <p className="text-sm">The member's saved picks are read-only. Admins cannot add or edit predictions after the deadline.</p>
+                            </div>
+                          </div>
+                        )}
                         <div className="rounded-2xl border border-violet-200/60 bg-violet-500/10 p-4">
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div className="flex items-center gap-3">
@@ -1939,12 +1994,14 @@ const AdminPage: React.FC = () => {
                                         label={`${fixture.homeTeam.name} score`}
                                         value={adminPredictions[fixture.id]?.home}
                                         onChange={(score) => setAdminPredictionScore(fixture.id, 'home', score)}
+                                        disabled={adminPredictionsLocked}
                                       />
                                       <span className="text-2xl font-black text-slate-400">VS</span>
                                       <AdminScoreStepper
                                         label={`${fixture.awayTeam.name} score`}
                                         value={adminPredictions[fixture.id]?.away}
                                         onChange={(score) => setAdminPredictionScore(fixture.id, 'away', score)}
+                                        disabled={adminPredictionsLocked}
                                       />
                                     </div>
 
@@ -1952,6 +2009,7 @@ const AdminPage: React.FC = () => {
                                       size="sm"
                                       variant={isJokerFixture ? 'warning' : 'outline'}
                                       onClick={() => setAdminJokerFixtureId(isJokerFixture ? null : fixture.id)}
+                                      disabled={adminPredictionsLocked}
                                       className="gap-1"
                                     >
                                       <Star className="h-4 w-4" />
@@ -1982,7 +2040,7 @@ const AdminPage: React.FC = () => {
                         })}
                         <Button
                           onClick={handleSaveMemberPredictions}
-                          disabled={saveMemberPredictionsMutation.isPending}
+                          disabled={adminPredictionsLocked || saveMemberPredictionsMutation.isPending}
                           className="gap-2"
                         >
                           <Save className="h-4 w-4" />

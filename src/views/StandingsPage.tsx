@@ -208,12 +208,12 @@ const StandingsPage: React.FC = () => {
       }
     };
 
-    const green = '#f5c451';
-    const ribbonBlue = '#2f8fd3';
-    ctx.fillStyle = '#170326';
+    const green = '#0d949d';
+    const ribbonBlue = '#1597a0';
+    ctx.fillStyle = '#dcebea';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle = '#4c13dc';
+    ctx.fillStyle = '#b9dfdc';
     ctx.beginPath();
     ctx.ellipse(200, -70, 980, 300, -0.08, 0, Math.PI * 2);
     ctx.fill();
@@ -221,7 +221,7 @@ const StandingsPage: React.FC = () => {
     ctx.ellipse(1760, 430, 820, 340, 0.42, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#240544';
+    ctx.fillStyle = '#cbc7ee';
     ctx.beginPath();
     ctx.ellipse(340, 790, 700, 980, -0.24, 0, Math.PI * 2);
     ctx.fill();
@@ -229,7 +229,7 @@ const StandingsPage: React.FC = () => {
     ctx.ellipse(1350, 1060, 780, 760, 0.12, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle = 'rgba(24,244,109,0.28)';
+    ctx.strokeStyle = 'rgba(13,148,157,0.16)';
     ctx.lineWidth = 2;
     for (let x = 16; x < canvas.width; x += 72) {
       for (let y = 250; y < canvas.height; y += 72) {
@@ -256,29 +256,29 @@ const StandingsPage: React.FC = () => {
     const statCenters = [panelX + 650, panelX + 735, panelX + 820, panelX + 895];
     const totalCenterX = panelX + 970;
 
-    ctx.fillStyle = '#230743';
+    ctx.fillStyle = 'rgba(239,248,246,0.92)';
     roundRect(ctx, panelX, panelY, panelW, panelH, 24);
     ctx.fill();
     ctx.strokeStyle = green;
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    ctx.fillStyle = 'rgba(255,255,255,0.055)';
+    ctx.fillStyle = 'rgba(255,255,255,0.42)';
     for (let y = panelY + 270; y < panelY + panelH - 40; y += 126) {
       ctx.fillRect(panelX + 1, y, panelW - 2, 96);
     }
 
-    ctx.fillStyle = '#f4fff8';
+    ctx.fillStyle = '#0f172a';
     ctx.font = '800 28px Inter, Arial';
     ctx.fillText('MATCHPULSE', panelX + 58, panelY + 110);
     ctx.fillStyle = green;
     ctx.font = '900 46px Inter, Arial';
     ctx.fillText(title.toUpperCase().slice(0, 24), panelX + 58, panelY + 170);
-    ctx.fillStyle = '#d7e7dc';
+    ctx.fillStyle = '#526f74';
     ctx.font = '700 20px Inter, Arial';
     ctx.fillText(formatLabel.toUpperCase(), panelX + 58, panelY + 215);
 
-    ctx.fillStyle = '#cbd5cf';
+    ctx.fillStyle = '#526f74';
     ctx.font = '700 17px Inter, Arial';
     const headers = activeTab === 'h2h-leaderboard'
       ? ['PLAYED', 'WON', 'LOST', 'TIED']
@@ -286,7 +286,7 @@ const StandingsPage: React.FC = () => {
         ? ['PLAYED', 'EXACT', 'OUT', 'LAST']
         : ['P1', 'P2', 'STATE', 'WIN'];
     headers.forEach((header, index) => drawCenteredText(ctx, header, statCenters[index], panelY + 275));
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#0f172a';
     drawCenteredText(ctx, 'TOTAL', totalCenterX, panelY + 275);
 
     rows.forEach((row, index) => {
@@ -320,12 +320,12 @@ const StandingsPage: React.FC = () => {
     ctx.save();
     ctx.translate(1705, 180);
     ctx.rotate(Math.PI / 2);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#0f172a';
     ctx.font = '500 42px Inter, Arial';
     ctx.fillText(`${formatLabel.toUpperCase()} STANDINGS`, 0, 0);
     ctx.restore();
 
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = '#0f172a';
     ctx.font = '800 34px Inter, Arial';
     ctx.fillText('made by', 1540, 1760);
     ctx.font = '900 44px Inter, Arial';
@@ -335,6 +335,166 @@ const StandingsPage: React.FC = () => {
     link.download = `${title.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-${formatLabel.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-standings.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
+  };
+
+  const generatePagedStandingsImages = () => {
+    const formatLabel = activeTab === 'overall'
+      ? leaderboardFilters.find((filter) => filter.id === leaderboardFilter)?.label || 'Overall'
+      : activeTab === 'h2h-leaderboard'
+        ? 'H2H League'
+        : 'Knockout';
+    const title = league?.name || 'MatchPulse League';
+    const rows = activeTab === 'overall'
+      ? (standings || []).map((standing, index) => ({
+        rank: index + 1,
+        name: standing.user.username,
+        values: [
+          String(standing.matchdaysPlayed),
+          String(standing.correctScores),
+          String(standing.correctOutcomes),
+          standing.lastMatchdayPoints > 0 ? `+${standing.lastMatchdayPoints}` : String(standing.lastMatchdayPoints),
+        ],
+        points: String(standing.totalPoints),
+        isCurrent: standing.user.username === user?.username,
+      }))
+      : activeTab === 'h2h-leaderboard'
+        ? (h2hStandings || []).map((standing, index) => ({
+          rank: index + 1,
+          name: standing.user.username,
+          values: [String(standing.matchupsPlayed), String(standing.wins), String(standing.losses), String(standing.draws)],
+          points: String(standing.h2hPoints),
+          isCurrent: standing.user.username === user?.username,
+        }))
+        : (knockoutBracket || []).map((matchup, index) => ({
+          rank: index + 1,
+          name: `${matchup.player1?.username || 'TBD'} vs ${matchup.player2?.username || 'BYE'}`,
+          values: [
+            matchup.resolved ? String(matchup.player1Points ?? 0) : '-',
+            matchup.resolved ? String(matchup.player2Points ?? 0) : '-',
+            matchup.resolved ? 'FT' : 'TBD',
+            matchup.knockoutRound?.replace(/_/g, ' ') || 'ROUND',
+          ],
+          points: matchup.winnerId ? 'WIN' : 'LIVE',
+          isCurrent: matchup.player1?.username === user?.username || matchup.player2?.username === user?.username,
+        }));
+
+    if (!rows.length) return;
+
+    const headers = activeTab === 'h2h-leaderboard'
+      ? ['PLAYED', 'WON', 'LOST', 'TIED']
+      : activeTab === 'overall'
+        ? ['PLAYED', 'EXACT', 'OUT', 'LAST']
+        : ['P1', 'P2', 'STATE', 'ROUND'];
+    const pageSize = 10;
+    const pageCount = Math.ceil(rows.length / pageSize);
+    const safeTitle = title.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    const safeFormat = formatLabel.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      const pageRows = rows.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize);
+      const canvas = document.createElement('canvas');
+      canvas.width = 1500;
+      canvas.height = 1180;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const background = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      background.addColorStop(0, '#e6f3f0');
+      background.addColorStop(0.58, '#d4e8e6');
+      background.addColorStop(1, '#d8d4ef');
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(255,255,255,0.38)';
+      ctx.beginPath();
+      ctx.arc(1320, 80, 300, 0, Math.PI * 2);
+      ctx.fill();
+
+      const tableX = 60;
+      const tableY = 245;
+      const tableWidth = 1380;
+      const headerHeight = 58;
+      const rowHeight = 82;
+      const rankX = tableX + 55;
+      const avatarX = tableX + 145;
+      const nameX = tableX + 205;
+      const statCenters = [tableX + 820, tableX + 955, tableX + 1090, tableX + 1210];
+      const pointsX = tableX + 1330;
+
+      ctx.fillStyle = '#0f172a';
+      ctx.font = '900 58px Inter, Arial';
+      drawTextWithin(ctx, `${title} Table`, tableX, 105, 1050);
+      ctx.fillStyle = '#0d7480';
+      ctx.font = '800 21px Inter, Arial';
+      ctx.fillText(`${formatLabel.toUpperCase()} STANDINGS`, tableX, 150);
+      ctx.fillStyle = '#526f74';
+      ctx.font = '700 18px Inter, Arial';
+      ctx.fillText(`POSITIONS ${pageRows[0].rank}-${pageRows[pageRows.length - 1].rank} OF ${rows.length}`, tableX, 187);
+      ctx.fillStyle = '#0d949d';
+      ctx.font = '900 30px Inter, Arial';
+      ctx.fillText('MP', 1330, 112);
+      ctx.fillStyle = '#526f74';
+      ctx.font = '700 15px Inter, Arial';
+      ctx.fillText(`PAGE ${pageIndex + 1} / ${pageCount}`, 1300, 145);
+
+      ctx.fillStyle = 'rgba(255,255,255,0.34)';
+      ctx.fillRect(tableX, tableY, tableWidth, headerHeight);
+      ctx.fillStyle = '#526f74';
+      ctx.font = '800 17px Inter, Arial';
+      ctx.fillText('POS', rankX - 20, tableY + 37);
+      ctx.fillText('PLAYER', nameX, tableY + 37);
+      headers.forEach((header, index) => drawCenteredText(ctx, header, statCenters[index], tableY + 37));
+      drawCenteredText(ctx, 'PTS', pointsX, tableY + 37);
+
+      pageRows.forEach((row, rowIndex) => {
+        const rowY = tableY + headerHeight + rowIndex * rowHeight;
+        ctx.fillStyle = row.isCurrent
+          ? 'rgba(181,225,220,0.96)'
+          : rowIndex % 2 === 0
+            ? 'rgba(255,255,255,0.72)'
+            : 'rgba(226,239,237,0.88)';
+        ctx.fillRect(tableX, rowY, tableWidth, rowHeight);
+        if (row.isCurrent) {
+          ctx.fillStyle = '#0d949d';
+          ctx.fillRect(tableX, rowY, 7, rowHeight);
+        }
+
+        const baseline = rowY + 52;
+        ctx.fillStyle = '#0f172a';
+        ctx.font = '900 27px Inter, Arial';
+        drawCenteredText(ctx, String(row.rank), rankX, baseline);
+        ctx.fillStyle = '#0d949d';
+        ctx.beginPath();
+        ctx.arc(avatarX, rowY + rowHeight / 2, 25, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 16px Inter, Arial';
+        drawCenteredText(ctx, row.name.slice(0, 2).toUpperCase(), avatarX, rowY + rowHeight / 2 + 6);
+        ctx.fillStyle = '#0f172a';
+        ctx.font = '800 25px Inter, Arial';
+        drawTextWithin(ctx, row.name, nameX, baseline, 535);
+        ctx.fillStyle = '#475569';
+        ctx.font = '700 23px Inter, Arial';
+        row.values.forEach((value, index) => drawCenteredText(ctx, value, statCenters[index], baseline));
+        ctx.fillStyle = '#0f172a';
+        ctx.font = '900 29px Inter, Arial';
+        drawCenteredText(ctx, row.points, pointsX, baseline);
+      });
+
+      const footerY = tableY + headerHeight + pageRows.length * rowHeight + 52;
+      ctx.fillStyle = '#526f74';
+      ctx.font = '700 16px Inter, Arial';
+      ctx.fillText('MATCHPULSE', tableX, footerY);
+      ctx.textAlign = 'right';
+      ctx.fillText(new Date().toLocaleDateString(), tableX + tableWidth, footerY);
+      ctx.textAlign = 'left';
+
+      const link = document.createElement('a');
+      const pageNumber = String(pageIndex + 1).padStart(2, '0');
+      const totalPages = String(pageCount).padStart(2, '0');
+      link.download = `${safeTitle}-${safeFormat}-standings-${pageNumber}-of-${totalPages}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
   };
 
   const getFormClass = (tone?: string) => {
@@ -366,6 +526,12 @@ const StandingsPage: React.FC = () => {
     { id: 'exact', label: 'Exact-score Ranking' },
     { id: 'h2h', label: 'H2H Ranking' },
   ];
+  const exportRowCount = activeTab === 'overall'
+    ? standings?.length || 0
+    : activeTab === 'h2h-leaderboard'
+      ? h2hStandings?.length || 0
+      : knockoutBracket?.length || 0;
+  const exportPageCount = Math.ceil(exportRowCount / 10);
 
   return (
     <div className="min-h-screen bg-stadium">
@@ -460,9 +626,9 @@ const StandingsPage: React.FC = () => {
                       <Share2 className="h-4 w-4" />
                       {copied === 'share' ? 'Copied' : 'Share Standings'}
                     </Button>
-                    <Button variant="outline" className="gap-2" onClick={generateStandingsImageCard}>
+                    <Button variant="outline" className="gap-2" onClick={generatePagedStandingsImages} disabled={!exportRowCount}>
                       <Download className="h-4 w-4" />
-                      Image Card
+                      Image Pages{exportPageCount > 1 ? ` (${exportPageCount})` : ''}
                     </Button>
                   </div>
                 </div>
@@ -508,24 +674,24 @@ const StandingsPage: React.FC = () => {
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_21rem]">
               <div>
               <Card className="standings-board mb-6">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-3 text-2xl font-black text-slate-900 sm:text-3xl">
                     <Medal className="h-5 w-5 text-primary" />
-                    League Table
+                    {league?.name || 'League'} Table
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="hidden overflow-x-auto md:block">
-                    <table className="w-full min-w-[840px] border-separate border-spacing-y-3">
+                <CardContent className="px-3 pb-4 sm:px-6">
+                  <div className="overflow-x-auto">
+                    <table className="standings-table w-full table-fixed">
                       <thead>
                         <tr>
-                          <th className="py-3 px-3 text-left">Rank</th>
-                          <th className="py-3 px-3 text-left">Player</th>
-                          <th className="py-3 px-3 text-center">Played</th>
-                          <th className="py-3 px-3 text-center">Exact</th>
-                          <th className="py-3 px-3 text-center">Outcome</th>
-                          <th className="py-3 px-3 text-center">Last</th>
-                          <th className="py-3 px-3 text-center">Points</th>
+                          <th className="w-12 px-2 py-3 text-center sm:w-16">Pos</th>
+                          <th className="w-[44%] px-2 py-3 text-left">Player</th>
+                          <th className="px-1 py-3 text-center"><span className="hidden sm:inline">Played</span><span className="sm:hidden">P</span></th>
+                          <th className="hidden px-1 py-3 text-center sm:table-cell">Exact</th>
+                          <th className="hidden px-1 py-3 text-center md:table-cell">Outcome</th>
+                          <th className="px-1 py-3 text-center"><span className="hidden sm:inline">Last</span><span className="sm:hidden">L</span></th>
+                          <th className="w-16 px-2 py-3 text-center sm:w-20">Pts</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -536,21 +702,21 @@ const StandingsPage: React.FC = () => {
                               <tr 
                                 key={standing.user.id} 
                                 className={cn(
-                                  "standings-row h-[3.35rem] transition-transform hover:-translate-y-0.5",
+                                  "standings-row",
                                   isCurrentUser && "standings-row-current"
                                 )}
                               >
-                                <td className="py-3 px-4">
-                                  <div className="flex items-center gap-1">
+                                <td className="px-2 py-3 text-center">
+                                  <div className="flex items-center justify-center gap-1">
                                     <span className="standings-rank">
                                       {index + 1}
                                     </span>
                                     {getRankIcon(index)}
                                   </div>
                                 </td>
-                                <td className="py-3 px-4">
-                                  <div className="flex items-center gap-3">
-                                    <Avatar className="h-9 w-9 border border-slate-200 bg-white shadow-sm">
+                                <td className="px-2 py-3">
+                                  <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+                                    <Avatar className="h-8 w-8 shrink-0 border border-white/70 bg-white shadow-sm sm:h-10 sm:w-10">
                                       {standing.user.profilePhoto ? (
                                         <AvatarImage src={standing.user.profilePhoto} alt={standing.user.username} />
                                       ) : null}
@@ -558,13 +724,13 @@ const StandingsPage: React.FC = () => {
                                         {getInitials(standing.user.username)}
                                       </AvatarFallback>
                                     </Avatar>
-                                    <div>
+                                    <div className="min-w-0">
                                       <span className="standings-player-cell">{standing.user.username}</span>
                                       {isCurrentUser && (
                                         <span className="ml-2 text-xs font-bold text-emerald-700">(You)</span>
                                       )}
                                       {(standing.badges?.length || 0) > 0 && (
-                                        <div className="mt-1 flex max-w-[18rem] flex-wrap gap-1">
+                                        <div className="hidden">
                                           {standing.badges?.slice(0, 3).map((badge) => (
                                             <span key={badge.key} className="inline-flex items-center gap-1 rounded-full bg-white/60 px-2 py-0.5 text-[10px] font-black uppercase text-primary">
                                               {getBadgeIcon(badge.key)}
@@ -576,21 +742,21 @@ const StandingsPage: React.FC = () => {
                                     </div>
                                   </div>
                                 </td>
-                                <td className="py-2 px-3 text-center standings-number">
+                                <td className="px-1 py-3 text-center standings-number">
                                   {standing.matchdaysPlayed}
                                 </td>
-                                <td className="py-2 px-3 text-center standings-number">
+                                <td className="hidden px-1 py-3 text-center standings-number sm:table-cell">
                                   {standing.correctScores}
                                 </td>
-                                <td className="py-2 px-3 text-center standings-number">
+                                <td className="hidden px-1 py-3 text-center standings-number md:table-cell">
                                   {standing.correctOutcomes}
                                 </td>
-                                <td className="py-3 px-3 text-center">
+                                <td className="px-1 py-3 text-center">
                                   <span className="standings-number">
                                     {standing.lastMatchdayPoints > 0 ? `+${standing.lastMatchdayPoints}` : standing.lastMatchdayPoints}
                                   </span>
                                 </td>
-                                <td className="py-3 px-3 text-center">
+                                <td className="px-2 py-3 text-center">
                                   <span className="standings-points">{standing.totalPoints}</span>
                                 </td>
                               </tr>
@@ -598,7 +764,7 @@ const StandingsPage: React.FC = () => {
                           })
                         ) : (
                           <tr>
-                            <td colSpan={7} className="py-12 text-center text-white/80">
+                            <td colSpan={7} className="py-12 text-center text-slate-500">
                               No standings data yet. Play some matchdays first!
                             </td>
                           </tr>
@@ -606,7 +772,7 @@ const StandingsPage: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
-                  <div className="space-y-3 md:hidden">
+                  <div className="hidden">
                     {standings && standings.length > 0 ? standings.map((standing, index) => {
                       const isCurrentUser = standing.user.username === user?.username;
                       return (
@@ -753,9 +919,9 @@ const StandingsPage: React.FC = () => {
                         <Copy className="h-4 w-4" />
                         {copied === 'share-card' ? 'Copied' : 'Copy Share Text'}
                       </Button>
-                      <Button className="mt-2 w-full gap-2" onClick={generateStandingsImageCard}>
+                      <Button className="mt-2 w-full gap-2" onClick={generatePagedStandingsImages} disabled={!exportRowCount}>
                         <Download className="h-4 w-4" />
-                        Download Image Card
+                        Download Image Pages{exportPageCount > 1 ? ` (${exportPageCount})` : ''}
                       </Button>
                     </CardContent>
                   </Card>
@@ -795,24 +961,24 @@ const StandingsPage: React.FC = () => {
             <>
               {/* H2H Leaderboard Table */}
               <Card className="standings-board mb-6">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-white">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-3 text-2xl font-black text-slate-900 sm:text-3xl">
                     <Swords className="h-5 w-5 text-amber-500" />
-                    H2H Leaderboard
+                    {league?.name || 'League'} H2H Table
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="px-3 pb-4 sm:px-6">
                   <div className="overflow-x-auto">
-                    <table className="w-full min-w-[760px] border-separate border-spacing-y-3">
+                    <table className="standings-table w-full table-fixed">
                       <thead>
                         <tr>
-                          <th className="py-3 px-3 text-left">Rank</th>
-                          <th className="py-3 px-3 text-left">Player</th>
-                          <th className="py-3 px-3 text-center">Played</th>
-                          <th className="py-3 px-3 text-center">Won</th>
-                          <th className="py-3 px-3 text-center">Lost</th>
-                          <th className="py-3 px-3 text-center">Tied</th>
-                          <th className="py-3 px-3 text-center">Points</th>
+                          <th className="w-12 px-2 py-3 text-center sm:w-16">Pos</th>
+                          <th className="w-[44%] px-2 py-3 text-left">Player</th>
+                          <th className="px-1 py-3 text-center"><span className="hidden sm:inline">Played</span><span className="sm:hidden">P</span></th>
+                          <th className="px-1 py-3 text-center"><span className="hidden sm:inline">Won</span><span className="sm:hidden">W</span></th>
+                          <th className="hidden px-1 py-3 text-center sm:table-cell">Lost</th>
+                          <th className="hidden px-1 py-3 text-center md:table-cell">Tied</th>
+                          <th className="w-16 px-2 py-3 text-center sm:w-20">Pts</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -823,21 +989,21 @@ const StandingsPage: React.FC = () => {
                               <tr 
                                 key={standing.user.id} 
                                 className={cn(
-                                  "standings-row h-[3.35rem] transition-transform hover:-translate-y-0.5",
+                                  "standings-row",
                                   isCurrentUser && "standings-row-current"
                                 )}
                               >
-                                <td className="py-3 px-4">
-                                  <div className="flex items-center gap-1">
+                                <td className="px-2 py-3 text-center">
+                                  <div className="flex items-center justify-center gap-1">
                                     <span className="standings-rank">
                                       {index + 1}
                                     </span>
                                     {getRankIcon(index)}
                                   </div>
                                 </td>
-                                <td className="py-3 px-4">
-                                  <div className="flex items-center gap-3">
-                                    <Avatar className="h-9 w-9 border border-slate-200 bg-white shadow-sm">
+                                <td className="px-2 py-3">
+                                  <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+                                    <Avatar className="h-8 w-8 shrink-0 border border-white/70 bg-white shadow-sm sm:h-10 sm:w-10">
                                       {standing.user.profilePhoto ? (
                                         <AvatarImage src={standing.user.profilePhoto} alt={standing.user.username} />
                                       ) : null}
@@ -845,7 +1011,7 @@ const StandingsPage: React.FC = () => {
                                         {getInitials(standing.user.username)}
                                       </AvatarFallback>
                                     </Avatar>
-                                    <div>
+                                    <div className="min-w-0">
                                       <span className="standings-player-cell">{standing.user.username}</span>
                                       {isCurrentUser && (
                                         <span className="ml-2 text-xs text-muted-foreground">(You)</span>
@@ -853,11 +1019,11 @@ const StandingsPage: React.FC = () => {
                                     </div>
                                   </div>
                                 </td>
-                                <td className="py-2 px-3 text-center standings-number">{standing.matchupsPlayed}</td>
-                                <td className="py-2 px-3 text-center standings-number">{standing.wins}</td>
-                                <td className="py-2 px-3 text-center standings-number">{standing.losses}</td>
-                                <td className="py-2 px-3 text-center standings-number">{standing.draws}</td>
-                                <td className="py-3 px-3 text-center">
+                                <td className="px-1 py-3 text-center standings-number">{standing.matchupsPlayed}</td>
+                                <td className="px-1 py-3 text-center standings-number">{standing.wins}</td>
+                                <td className="hidden px-1 py-3 text-center standings-number sm:table-cell">{standing.losses}</td>
+                                <td className="hidden px-1 py-3 text-center standings-number md:table-cell">{standing.draws}</td>
+                                <td className="px-2 py-3 text-center">
                                   <span className="standings-points">{standing.h2hPoints}</span>
                                 </td>
                               </tr>
@@ -865,7 +1031,7 @@ const StandingsPage: React.FC = () => {
                           })
                         ) : (
                           <tr>
-                            <td colSpan={7} className="py-12 text-center text-white/80">
+                            <td colSpan={7} className="py-12 text-center text-slate-500">
                               No H2H matchups have been played yet.
                             </td>
                           </tr>

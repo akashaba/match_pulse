@@ -559,22 +559,31 @@
 
 .standings-board {
   overflow: hidden;
-  border: 1px solid rgb(255 255 255 / 0.28);
+  border: 1px solid rgb(255 255 255 / 0.6);
+  border-radius: 1.55rem;
   background:
-    radial-gradient(circle at 82% 4%, rgb(73 31 214 / 0.72), transparent 22rem),
-    radial-gradient(circle at 12% 92%, rgb(251 190 65 / 0.24), transparent 15rem),
-    linear-gradient(160deg, rgb(40 9 76), rgb(22 6 48) 52%, rgb(54 9 96));
-  box-shadow: 0 26px 70px rgb(42 16 86 / 0.28), inset 0 1px 0 rgb(255 255 255 / 0.18);
+    radial-gradient(circle at 84% 8%, rgb(191 187 238 / 0.34), transparent 15rem),
+    linear-gradient(180deg, rgb(225 240 238 / 0.88), rgb(209 229 228 / 0.7));
+  box-shadow: 0 22px 52px rgb(56 86 98 / 0.14), inset 0 1px 0 rgb(255 255 255 / 0.55);
   backdrop-filter: blur(22px);
+}
+
+.standings-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border-radius: 0.9rem;
 }
 
 .standings-board .card-title,
 .standings-board [class*="CardTitle"] {
-  color: white;
+  color: rgb(15 23 42);
 }
 
 .standings-board thead th {
-  color: rgb(255 255 255 / 0.92);
+  border: 0;
+  background: rgb(255 255 255 / 0.28);
+  color: rgb(87 111 116);
   font-size: 0.74rem;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -582,41 +591,36 @@
 
 .standings-row {
   position: relative;
-  isolation: isolate;
   color: rgb(15 23 42);
-  filter: drop-shadow(0 12px 20px rgb(0 0 0 / 0.18));
 }
 
 .standings-row td {
-  height: 3.35rem;
-  background: rgb(46 143 211);
-  border-right: 1px solid rgb(255 255 255 / 0.22);
-  color: white;
+  height: 4rem;
+  border: 0;
+  border-bottom: 1px solid rgb(255 255 255 / 0.5);
+  background: rgb(255 255 255 / 0.55);
+  color: rgb(51 65 85);
+  transition: background-color 160ms ease;
+}
+
+.standings-row:nth-child(even) td {
+  background: rgb(215 232 230 / 0.78);
+}
+
+.standings-row:hover td {
+  background: rgb(196 227 223 / 0.92);
 }
 
 .standings-row td:first-child {
-  position: relative;
-  min-width: 5.2rem;
-  background: rgb(40 143 213);
-  clip-path: polygon(9% 0, 100% 0, 84% 50%, 100% 100%, 9% 100%, 0 50%);
+  min-width: 3rem;
 }
 
 .standings-row td:nth-child(2) {
-  position: relative;
-  background: white;
-  color: rgb(10 15 27);
-  clip-path: polygon(0 0, calc(100% - 1.5rem) 0, 100% 50%, calc(100% - 1.5rem) 100%, 0 100%, 1.2rem 50%);
+  color: rgb(15 23 42);
 }
 
 .standings-row td:nth-last-child(1) {
-  background: white;
-  color: rgb(10 15 27);
-  clip-path: polygon(0 0, calc(100% - 1.2rem) 0, 100% 50%, calc(100% - 1.2rem) 100%, 0 100%, 1rem 50%);
-  border-right: 0;
-}
-
-.standings-row td:nth-last-child(2) {
-  clip-path: polygon(0 0, calc(100% - 1.1rem) 0, 100% 50%, calc(100% - 1.1rem) 100%, 0 100%);
+  color: rgb(15 23 42);
 }
 
 .standings-row::after {
@@ -628,15 +632,17 @@
 }
 
 .standings-row-current {
-  outline: 2px solid rgb(250 204 21 / 0.75);
-  outline-offset: 3px;
+  outline: 0;
+}
+
+.standings-row-current td:first-child {
+  box-shadow: inset 0.32rem 0 0 rgb(13 148 157);
 }
 
 .standings-rank {
-  color: white;
+  color: rgb(13 116 128);
   font-size: 1.18rem;
   font-weight: 900;
-  text-shadow: 0 2px 0 rgb(0 0 0 / 0.18);
 }
 
 .standings-player-cell {
@@ -647,20 +653,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: rgb(15 23 42);
-  font-weight: 900;
-  text-transform: uppercase;
+  font-size: clamp(0.78rem, 2vw, 1rem);
+  font-weight: 850;
 }
 
 .standings-number {
-  color: white;
-  font-size: 1.05rem;
-  font-weight: 900;
-  text-shadow: 0 2px 0 rgb(0 0 0 / 0.14);
+  color: rgb(71 85 105);
+  font-size: clamp(0.78rem, 2vw, 1rem);
+  font-weight: 750;
 }
 
 .standings-points {
-  color: rgb(5 8 15);
-  font-size: 1.18rem;
+  color: rgb(15 23 42);
+  font-size: clamp(0.95rem, 2.2vw, 1.2rem);
   font-weight: 950;
 }
 

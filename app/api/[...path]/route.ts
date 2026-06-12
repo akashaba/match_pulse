@@ -682,17 +682,111 @@ async function seedDeadlineNotifications(supabase: ReturnType<typeof getSupabase
   }));
 }
 
+function roundRobinPairs(memberIds: number[], roundNumber: number) {
+  const players: Array<number | null> = [...memberIds];
+  if (players.length % 2) players.push(null);
+  if (players.length < 2) return [];
+
+  const fixed = players[0];
+  const rotating = players.slice(1);
+  const rotations = Math.max(0, roundNumber - 1) % rotating.length;
+  for (let index = 0; index < rotations; index += 1) {
+    rotating.unshift(rotating.pop() ?? null);
+  }
+
+  const arranged = [fixed, ...rotating];
+  const pairs: Array<[number | null, number | null]> = [];
+  for (let index = 0; index < arranged.length / 2; index += 1) {
+    pairs.push([arranged[index], arranged[arranged.length - 1 - index]]);
+  }
+  return pairs.filter(([player1, player2]) => player1 || player2);
+}
+
+async function ensureH2hMatchups(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  leagueId: number,
+  matchdayId: number
+) {
+  const [{ data: league }, { data: matchday }, { data: members }] = await Promise.all([
+    supabase.from('leagues').select('h2h_leaderboard_enabled,h2h_knockout_enabled').eq('id', leagueId).single(),
+    supabase.from('matchdays').select('id,number').eq('id', matchdayId).single(),
+    supabase.from('league_members').select('user_id').eq('league_id', leagueId).order('user_id'),
+  ]);
+  if (!league || !matchday || !members?.length) return;
+
+  const memberIds = members.map((member: any) => member.user_id);
+  if (league.h2h_leaderboard_enabled) {
+    const { count } = await supabase
+      .from('h2h_matchups')
+      .select('id', { count: 'exact', head: true })
+      .eq('league_id', leagueId)
+      .eq('matchday_id', matchdayId)
+      .eq('format', 'LEADERBOARD');
+    if (!count) {
+      const rows = roundRobinPairs(memberIds, matchday.number).map(([player1Id, player2Id]) => ({
+        league_id: leagueId,
+        matchday_id: matchdayId,
+        format: 'LEADERBOARD',
+        player1_id: player1Id || player2Id,
+        player2_id: player1Id ? player2Id : null,
+      }));
+      if (rows.length) await supabase.from('h2h_matchups').insert(rows);
+    }
+  }
+
+  if (league.h2h_knockout_enabled) {
+    const { count } = await supabase
+      .from('h2h_matchups')
+      .select('id', { count: 'exact', head: true })
+      .eq('league_id', leagueId)
+      .eq('format', 'KNOCKOUT');
+    if (!count) {
+      const round = memberIds.length > 16 ? 'ROUND_OF_32'
+        : memberIds.length > 8 ? 'ROUND_OF_16'
+          : memberIds.length > 4 ? 'QUARTER_FINAL'
+            : memberIds.length > 2 ? 'SEMI_FINAL'
+              : 'FINAL';
+      const rows = roundRobinPairs(memberIds, 1).map(([player1Id, player2Id], index) => ({
+        league_id: leagueId,
+        matchday_id: matchdayId,
+        format: 'KNOCKOUT',
+        player1_id: player1Id || player2Id,
+        player2_id: player1Id ? player2Id : null,
+        knockout_round: round,
+        bracket_position: index,
+      }));
+      if (rows.length) await supabase.from('h2h_matchups').insert(rows);
+    }
+  }
+}
+
+async function ensureAllLeagueH2hMatchups(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId: number) {
+  const { data: league } = await supabase.from('leagues').select('division_id').eq('id', leagueId).single();
+  if (!league) return;
+  const { data: matchdays } = await supabase.from('matchdays').select('id').eq('division_id', league.division_id).order('number');
+  for (const matchday of matchdays || []) {
+    await ensureH2hMatchups(supabase, leagueId, matchday.id);
+  }
+}
+
 async function recalcH2h(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId: number, matchdayId?: number) {
   let query = supabase.from('h2h_matchups').select('*').eq('league_id', leagueId);
   if (matchdayId) query = query.eq('matchday_id', matchdayId);
   const { data: matchups } = await query;
 
+  const matchdayIds = [...new Set((matchups || []).map((matchup: any) => matchup.matchday_id))];
+  const { data: fixtureRows } = matchdayIds.length
+    ? await supabase.from('fixtures').select('matchday_id,status').in('matchday_id', matchdayIds)
+    : { data: [] as any[] };
+
   for (const matchup of matchups || []) {
     const p1 = await totalPredictionPoints(supabase, leagueId, matchup.player1_id, matchup.matchday_id);
     const p2 = matchup.player2_id ? await totalPredictionPoints(supabase, leagueId, matchup.player2_id, matchup.matchday_id) : 0;
-    const p1H2h = !matchup.player2_id || p1 > p2 ? 3 : p1 === p2 ? 1 : 0;
-    const p2H2h = !matchup.player2_id ? 0 : p2 > p1 ? 3 : p1 === p2 ? 1 : 0;
-    const winnerId = !matchup.player2_id || p1 > p2 ? matchup.player1_id : p2 > p1 ? matchup.player2_id : null;
+    const matchdayFixtures = (fixtureRows || []).filter((fixture: any) => fixture.matchday_id === matchup.matchday_id);
+    const resolved = matchdayFixtures.length > 0 && matchdayFixtures.every((fixture: any) => fixture.status === 'COMPLETED');
+    const p1H2h = resolved ? (!matchup.player2_id || p1 > p2 ? 3 : p1 === p2 ? 1 : 0) : null;
+    const p2H2h = resolved ? (!matchup.player2_id ? 0 : p2 > p1 ? 3 : p1 === p2 ? 1 : 0) : null;
+    const winnerId = resolved ? (!matchup.player2_id || p1 > p2 ? matchup.player1_id : p2 > p1 ? matchup.player2_id : null) : null;
 
     await supabase.from('h2h_matchups').update({
       player1_points: p1,
@@ -700,11 +794,11 @@ async function recalcH2h(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId
       player1_h2h_points: p1H2h,
       player2_h2h_points: p2H2h,
       winner_id: winnerId,
-      resolved: true,
+      resolved,
     }).eq('id', matchup.id);
   }
 
-  const { data: allMatchups } = await supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('resolved', true);
+  const { data: allMatchups } = await supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('format', 'LEADERBOARD').eq('resolved', true);
   const { data: members } = await supabase.from('league_members').select('user_id').eq('league_id', leagueId);
 
   for (const member of members || []) {
@@ -728,13 +822,18 @@ async function recalcH2h(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId
 
 async function h2hDto(supabase: ReturnType<typeof getSupabaseAdmin>, matchup: any) {
   const ids = [matchup.player1_id, matchup.player2_id, matchup.winner_id].filter(Boolean);
-  const { data: users } = ids.length ? await supabase.from('users').select('*').in('id', ids) : { data: [] as any[] };
+  const [{ data: users }, { data: matchday }] = await Promise.all([
+    ids.length ? supabase.from('users').select('*').in('id', ids) : Promise.resolve({ data: [] as any[] }),
+    supabase.from('matchdays').select('name,number').eq('id', matchup.matchday_id).single(),
+  ]);
   const byId = new Map((users || []).map((u: any) => [u.id, publicUser(u)]));
 
   return {
     id: matchup.id,
     leagueId: matchup.league_id,
     matchdayId: matchup.matchday_id,
+    matchdayName: matchday?.name || `Matchday ${matchday?.number || ''}`.trim(),
+    matchdayNumber: matchday?.number || 0,
     format: matchup.format,
     player1: byId.get(matchup.player1_id) ?? null,
     player2: byId.get(matchup.player2_id) ?? null,
@@ -1411,6 +1510,8 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
 
     if (path[2] === 'h2h') {
       if (path[3] === 'leaderboard' && path[4] === 'standings' && request.method === 'GET') {
+        await ensureAllLeagueH2hMatchups(supabase, leagueId);
+        await recalcH2h(supabase, leagueId);
         const { data } = await supabase.from('h2h_standings').select('*, user:users(*)').eq('league_id', leagueId).order('h2h_points', { ascending: false }).order('total_prediction_points', { ascending: false });
         return json((data || []).map((s: any) => ({
           id: s.id,
@@ -1426,6 +1527,9 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
 
       if (path[3] === 'leaderboard' && path[4] === 'matchups' && request.method === 'GET') {
         const matchdayId = request.nextUrl.searchParams.get('matchdayId');
+        if (matchdayId) await ensureH2hMatchups(supabase, leagueId, Number(matchdayId));
+        else await ensureAllLeagueH2hMatchups(supabase, leagueId);
+        await recalcH2h(supabase, leagueId, matchdayId ? Number(matchdayId) : undefined);
         let query = supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('format', 'LEADERBOARD');
         if (matchdayId) query = query.eq('matchday_id', Number(matchdayId));
         const { data } = await query.order('matchday_id').order('id');
@@ -1446,6 +1550,8 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
       }
 
       if (path[3] === 'knockout' && path[4] === 'bracket' && request.method === 'GET') {
+        await ensureAllLeagueH2hMatchups(supabase, leagueId);
+        await recalcH2h(supabase, leagueId);
         const { data } = await supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('format', 'KNOCKOUT').order('bracket_position');
         return json(await Promise.all((data || []).map((m: any) => h2hDto(supabase, m))));
       }
@@ -1465,12 +1571,17 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
 
       if (path[3] === 'matchday' && path[5] === 'my-matchups' && request.method === 'GET') {
         const matchdayId = asInt(path[4]);
+        await ensureH2hMatchups(supabase, leagueId, matchdayId);
+        await recalcH2h(supabase, leagueId, matchdayId);
         const { data } = await supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('matchday_id', matchdayId).or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`);
         return json(await Promise.all((data || []).map((m: any) => h2hDto(supabase, m))));
       }
 
       if (path[3] === 'matchday' && path[5] === 'matchups' && request.method === 'GET') {
-        const { data } = await supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('matchday_id', asInt(path[4]));
+        const matchdayId = asInt(path[4]);
+        await ensureH2hMatchups(supabase, leagueId, matchdayId);
+        await recalcH2h(supabase, leagueId, matchdayId);
+        const { data } = await supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('matchday_id', matchdayId);
         return json(await Promise.all((data || []).map((m: any) => h2hDto(supabase, m))));
       }
     }
@@ -1612,6 +1723,12 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
       const matchdayId = asInt(path[4]);
       const memberUserId = asInt(path[6]);
       const rows = Array.isArray(body?.predictions) ? body.predictions : [];
+
+      const { data: matchday } = await supabase.from('matchdays').select('*').eq('id', matchdayId).single();
+      if (!matchday) return fail('Matchday not found', 404);
+      if (!matchdayDto(matchday).predictionsOpen) {
+        return fail('Predictions are closed for this matchday and cannot be added or edited', 400);
+      }
 
       const { data: member } = await supabase
         .from('league_members')

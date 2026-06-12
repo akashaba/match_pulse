@@ -19,6 +19,7 @@ import ActivityFeed from '../components/ActivityFeed';
 import { fixtureApi } from '../api/fixtureApi';
 import { leagueApi } from '../api/leagueApi';
 import { matchdayApi } from '../api/matchdayApi';
+import { predictionApi } from '../api/predictionApi';
 import { standingsApi } from '../api/standingsApi';
 import { League } from '../types/league.types';
 import { Button } from '@/components/ui/button';
@@ -108,6 +109,41 @@ const DashboardPage: React.FC = () => {
     enabled: !!activeMatchday?.id,
   });
 
+  const nextMatchday = useMemo(() => {
+    if (!activeMatchday) return undefined;
+    return [...matchdays]
+      .filter((matchday) => matchday.number > activeMatchday.number && matchday.computedStatus !== 'COMPLETED')
+      .sort((a, b) => a.number - b.number)[0];
+  }, [activeMatchday, matchdays]);
+
+  const orderedFixtures = useMemo(() => [...fixtures].sort((a, b) => {
+    const aTime = a.kickoffAt ? new Date(a.kickoffAt).getTime() : Number.MAX_SAFE_INTEGER;
+    const bTime = b.kickoffAt ? new Date(b.kickoffAt).getTime() : Number.MAX_SAFE_INTEGER;
+    return aTime - bTime || (a.displayOrder || a.id) - (b.displayOrder || b.id);
+  }), [fixtures]);
+
+  const pendingFixtures = orderedFixtures.filter((fixture) => fixture.status !== 'COMPLETED');
+
+  const { data: nextMatchdayFixtures = [] } = useQuery({
+    queryKey: ['dashboard-next-fixtures', nextMatchday?.id],
+    queryFn: () => fixtureApi.getFixturesByMatchday(nextMatchday!.id),
+    enabled: !!nextMatchday?.id && pendingFixtures.length === 0,
+  });
+
+  const orderedNextMatchdayFixtures = useMemo(() => [...nextMatchdayFixtures]
+    .filter((fixture) => fixture.status !== 'COMPLETED')
+    .sort((a, b) => {
+      const aTime = a.kickoffAt ? new Date(a.kickoffAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const bTime = b.kickoffAt ? new Date(b.kickoffAt).getTime() : Number.MAX_SAFE_INTEGER;
+      return aTime - bTime || (a.displayOrder || a.id) - (b.displayOrder || b.id);
+    }), [nextMatchdayFixtures]);
+
+  const { data: userPredictions = [] } = useQuery({
+    queryKey: ['dashboard-predictions', selectedLeague?.id, activeMatchday?.id],
+    queryFn: () => predictionApi.getUserPredictionsForMatchday(activeMatchday!.id, selectedLeague!.id),
+    enabled: !!selectedLeague?.id && !!activeMatchday?.id,
+  });
+
   const { data: standings = [] } = useQuery({
     queryKey: ['dashboard-standings', selectedLeague?.id],
     queryFn: () => standingsApi.getLeagueStandings(selectedLeague!.id),
@@ -120,8 +156,13 @@ const DashboardPage: React.FC = () => {
     enabled: !!selectedLeague?.id,
   });
 
-  const primaryFixture = fixtures[0];
-  const topFixtures = fixtures.slice(0, 3);
+  const primaryFixture = pendingFixtures[0] || orderedNextMatchdayFixtures[0];
+  const primaryFixtureMatchday = pendingFixtures.length ? activeMatchday : nextMatchday;
+  const predictionsByFixture = new Map(userPredictions.map((prediction) => [prediction.fixtureId, prediction]));
+  const visiblePredictionFixtures = activeMatchday?.predictionsOpen
+    ? orderedFixtures
+    : orderedFixtures.filter((fixture) => predictionsByFixture.has(fixture.id));
+  const topFixtures = visiblePredictionFixtures.slice(0, 3);
   const topStandings = standings.slice(0, 6);
   const leader = standings[0];
   const userRank = standings.findIndex((standing) => standing.user.username === user?.username) + 1;
@@ -238,7 +279,9 @@ const DashboardPage: React.FC = () => {
             </div>
 
             <div className="space-y-4 p-4 pt-0">
-              {topFixtures.length ? topFixtures.map((fixture) => (
+              {topFixtures.length ? topFixtures.map((fixture) => {
+                const prediction = predictionsByFixture.get(fixture.id);
+                return (
                 <article key={fixture.id} className="rounded-[1.35rem] border border-white/55 bg-white/38 p-4 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center rounded-3xl bg-white/45 p-2">
@@ -263,18 +306,36 @@ const DashboardPage: React.FC = () => {
                       <span>{formatFixtureDate(fixture.kickoffAt || activeMatchday?.startDate)}</span>
                     </div>
 
-                    {selectedLeague && activeMatchday && (
+                    {prediction && (
+                      <div className="mt-3 flex items-center justify-between rounded-xl bg-white/55 px-3 py-2 text-sm">
+                        <span className="font-semibold text-slate-600">Your prediction</span>
+                        <span className="font-black text-teal-700">
+                          {prediction.predictedHomeScore} - {prediction.predictedAwayScore}
+                        </span>
+                      </div>
+                    )}
+                    {fixture.status === 'COMPLETED' && (
+                      <div className="mt-2 flex items-center justify-between rounded-xl bg-teal-600 px-3 py-2 text-sm text-white">
+                        <span className="font-semibold">Final result</span>
+                        <span className="font-black">{fixture.homeScore} - {fixture.awayScore}</span>
+                      </div>
+                    )}
+
+                    {selectedLeague && activeMatchday && activeMatchday.predictionsOpen && fixture.status !== 'COMPLETED' && (
                       <Link to={`/leagues/${selectedLeague.id}/matchdays/${activeMatchday.id}`}>
                         <Button className="mt-4 w-full rounded-full">
-                          {fixture.status === 'COMPLETED' ? 'View Result' : 'Make Prediction'}
+                          {prediction ? 'Edit Prediction' : 'Make Prediction'}
                         </Button>
                       </Link>
                     )}
                   </div>
                 </article>
-              )) : (
+              );
+              }) : (
                 <div className="rounded-[1.35rem] border border-white/55 bg-white/35 p-8 text-center text-sm text-slate-500">
-                  No fixtures available for the selected matchday.
+                  {activeMatchday && !activeMatchday.predictionsOpen
+                    ? 'Predictions are closed. You did not submit any picks for this matchday.'
+                    : 'No fixtures available for the selected matchday.'}
                 </div>
               )}
             </div>
@@ -285,7 +346,7 @@ const DashboardPage: React.FC = () => {
               <div>
                 <p className="text-sm font-semibold text-teal-700">Next game</p>
                 <p className="mt-2 text-xs text-slate-500">
-                  {activeMatchday ? `${activeMatchday.name} - ${formatFixtureDate(primaryFixture?.kickoffAt || activeMatchday.startDate)}` : 'No gameweek scheduled'}
+                  {primaryFixtureMatchday ? `${primaryFixtureMatchday.name} - ${formatFixtureDate(primaryFixture?.kickoffAt || primaryFixtureMatchday.startDate)}` : 'No gameweek scheduled'}
                 </p>
               </div>
               <FaCalendarAlt className="text-teal-600" />
@@ -305,7 +366,7 @@ const DashboardPage: React.FC = () => {
                   </div>
                 </>
               ) : (
-                <p className="text-sm font-semibold text-slate-600">Fixtures will appear here once a matchday is ready.</p>
+                <p className="text-sm font-semibold text-slate-600">No pending fixtures are currently scheduled.</p>
               )}
             </div>
           </article>

@@ -219,6 +219,15 @@ const Navbar: React.FC<NavbarProps> = ({ children }) => {
               <span>{user.username}</span>
             </Link>
           )}
+          <button
+            type="button"
+            onClick={logout}
+            className="app-icon-button text-slate-600 hover:text-rose-500 lg:hidden"
+            aria-label="Log out"
+            title="Log out"
+          >
+            <FaSignOutAlt />
+          </button>
         </div>
       </header>
 
