@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle, Crown, ImageIcon, KeyRound, Lock, RotateCcw, Save, Search, Shield, Unlock, Upload, Users, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Crown, ExternalLink, ImageIcon, KeyRound, Lock, RotateCcw, Save, Search, Shield, Trash2, Trophy, Unlock, Upload, Users, X } from 'lucide-react';
 import { superAdminApi, UserProfile } from '../api/superAdminApi';
 import { adminApi } from '../api/adminApi';
 import { settingsApi } from '../api/settingsApi';
@@ -41,6 +42,11 @@ const SuperAdminPage: React.FC = () => {
   const { data: users, isLoading } = useQuery({
     queryKey: ['all-users'],
     queryFn: superAdminApi.getAllUsers,
+  });
+
+  const { data: leagues = [], isLoading: leaguesLoading } = useQuery({
+    queryKey: ['super-admin-leagues'],
+    queryFn: superAdminApi.getAllLeagues,
   });
 
   const { data: loginSettings } = useQuery({
@@ -124,6 +130,21 @@ const SuperAdminPage: React.FC = () => {
     },
     onError: (err: any) => {
       setError(err.response?.data?.message || 'Failed to unlock account');
+      setTimeout(() => setError(null), 5000);
+    },
+  });
+
+  const removeLeagueMemberMutation = useMutation({
+    mutationFn: ({ leagueId, userId }: { leagueId: number; userId: number }) =>
+      superAdminApi.removeLeagueMember(leagueId, userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['super-admin-leagues'] });
+      queryClient.invalidateQueries({ queryKey: ['league'] });
+      setSuccess('Member removed from league');
+      setTimeout(() => setSuccess(null), 3000);
+    },
+    onError: (err: any) => {
+      setError(err.response?.data?.message || 'Failed to remove league member');
       setTimeout(() => setError(null), 5000);
     },
   });
@@ -482,6 +503,64 @@ const SuperAdminPage: React.FC = () => {
                 </div>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-6 bg-card/80 backdrop-blur-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-primary" />
+              All Leagues
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {leaguesLoading ? (
+              <p className="py-6 text-center text-muted-foreground">Loading leagues...</p>
+            ) : leagues.length === 0 ? (
+              <p className="py-6 text-center text-muted-foreground">No leagues have been created.</p>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {leagues.map((league) => (
+                  <div key={league.id} className="rounded-[1.25rem] border border-white/60 bg-white/40 p-4 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-black text-foreground">{league.name}</h3>
+                        <p className="text-sm text-muted-foreground">{league.division.name} · Created by {league.createdBy.username}</p>
+                      </div>
+                      <Link to={`/leagues/${league.id}`}>
+                        <Button variant="outline" size="sm" className="gap-1.5"><ExternalLink className="h-4 w-4" /> View</Button>
+                      </Link>
+                    </div>
+                    <div className="mt-4 space-y-2">
+                      {league.members.map((member) => {
+                        const isCreator = member.id === league.createdBy.id;
+                        return (
+                          <div key={member.id} className="flex items-center justify-between gap-3 rounded-xl bg-white/55 px-3 py-2">
+                            <div className="min-w-0">
+                              <p className="truncate font-bold text-foreground">{member.username}</p>
+                              <p className="truncate text-xs text-muted-foreground">{member.isGuest ? 'Guest user' : member.email || 'Registered user'}{isCreator ? ' · Creator' : ''}</p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-1 text-destructive"
+                              disabled={isCreator || removeLeagueMemberMutation.isPending}
+                              onClick={() => {
+                                if (window.confirm(`Remove ${member.username} from ${league.name}?`)) {
+                                  removeLeagueMemberMutation.mutate({ leagueId: league.id, userId: member.id });
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" /> Remove
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 

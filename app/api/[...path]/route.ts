@@ -134,6 +134,7 @@ function publicUser(user: any) {
 
 function authResponse(user: DbUser) {
   return {
+    id: user.id,
     token: signSession({ id: user.id, username: user.username, email: user.email, role: user.role }),
     username: user.username,
     email: user.email,
@@ -322,6 +323,33 @@ async function addLeagueMember(supabase: ReturnType<typeof getSupabaseAdmin>, le
   await supabase.from('league_members').upsert({ league_id: leagueId, user_id: userId }, { onConflict: 'league_id,user_id' });
   await supabase.from('league_standings').upsert({ league_id: leagueId, user_id: userId }, { onConflict: 'league_id,user_id' });
   await supabase.from('h2h_standings').upsert({ league_id: leagueId, user_id: userId }, { onConflict: 'league_id,user_id' });
+  await ensureAllLeagueH2hMatchups(supabase, leagueId, true);
+  await recalcH2h(supabase, leagueId);
+}
+
+async function canManageLeague(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  leagueId: number,
+  user: SessionUser,
+) {
+  if (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') return true;
+  const { data } = await supabase.from('leagues').select('created_by').eq('id', leagueId).maybeSingle();
+  return data?.created_by === user.id;
+}
+
+async function removeLeagueMember(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId: number, userId: number) {
+  const { data: league } = await supabase.from('leagues').select('created_by').eq('id', leagueId).maybeSingle();
+  if (!league) throw new Error('League not found');
+  if (league.created_by === userId) throw new Error('The league creator cannot be removed');
+
+  await supabase.from('h2h_matchups').delete().eq('league_id', leagueId).or(`player1_id.eq.${userId},player2_id.eq.${userId}`);
+  await supabase.from('predictions').delete().eq('league_id', leagueId).eq('user_id', userId);
+  await supabase.from('league_standings').delete().eq('league_id', leagueId).eq('user_id', userId);
+  await supabase.from('h2h_standings').delete().eq('league_id', leagueId).eq('user_id', userId);
+  const { error } = await supabase.from('league_members').delete().eq('league_id', leagueId).eq('user_id', userId);
+  if (error) throw new Error(error.message);
+  await ensureAllLeagueH2hMatchups(supabase, leagueId, true);
+  await recalcH2h(supabase, leagueId);
 }
 
 async function createGuestUser(supabase: ReturnType<typeof getSupabaseAdmin>, displayName: string, email?: string) {
@@ -341,6 +369,74 @@ async function createGuestUser(supabase: ReturnType<typeof getSupabaseAdmin>, di
 
   if (error) throw new Error(error.message);
   return data;
+}
+
+async function mergeGuestIntoUser(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  guestUserId: number,
+  targetUserId: number,
+) {
+  if (guestUserId === targetUserId) throw new Error('This guest is already linked to this account');
+  const [{ data: guest }, { data: target }] = await Promise.all([
+    supabase.from('users').select('*').eq('id', guestUserId).single(),
+    supabase.from('users').select('*').eq('id', targetUserId).single(),
+  ]);
+  if (!guest?.is_guest) throw new Error('Only guest members can be claimed');
+  if (!target || target.is_guest) throw new Error('Claim with a registered user account');
+
+  const { data: guestMemberships } = await supabase.from('league_members').select('league_id').eq('user_id', guestUserId);
+  const leagueIds = [...new Set((guestMemberships || []).map((row: any) => row.league_id))];
+
+  const { data: guestPredictions } = await supabase
+    .from('predictions')
+    .select('fixture_id,league_id')
+    .eq('user_id', guestUserId);
+  for (const prediction of guestPredictions || []) {
+    await supabase
+      .from('predictions')
+      .delete()
+      .eq('user_id', targetUserId)
+      .eq('fixture_id', prediction.fixture_id)
+      .eq('league_id', prediction.league_id);
+  }
+  await supabase.from('predictions').update({ user_id: targetUserId, updated_at: new Date().toISOString() }).eq('user_id', guestUserId);
+
+  for (const leagueId of leagueIds) {
+    await supabase.from('league_members').delete().eq('league_id', leagueId).eq('user_id', targetUserId);
+    await supabase.from('league_standings').delete().eq('league_id', leagueId).eq('user_id', targetUserId);
+    await supabase.from('h2h_standings').delete().eq('league_id', leagueId).eq('user_id', targetUserId);
+  }
+  await supabase.from('league_members').update({ user_id: targetUserId }).eq('user_id', guestUserId);
+  await supabase.from('league_standings').update({ user_id: targetUserId }).eq('user_id', guestUserId);
+  await supabase.from('h2h_standings').update({ user_id: targetUserId }).eq('user_id', guestUserId);
+
+  await supabase.from('h2h_matchups').update({ player1_id: targetUserId }).eq('player1_id', guestUserId);
+  await supabase.from('h2h_matchups').update({ player2_id: targetUserId }).eq('player2_id', guestUserId);
+  await supabase.from('h2h_matchups').update({ winner_id: targetUserId }).eq('winner_id', guestUserId);
+  await supabase.from('activities').update({ actor_id: targetUserId }).eq('actor_id', guestUserId);
+  await supabase.from('notifications').update({ actor_id: targetUserId }).eq('actor_id', guestUserId);
+
+  const { data: guestNotifications } = await supabase.from('notifications').select('unique_key').eq('user_id', guestUserId);
+  const uniqueKeys = (guestNotifications || []).map((row: any) => row.unique_key).filter(Boolean);
+  if (uniqueKeys.length) {
+    await supabase.from('notifications').delete().eq('user_id', targetUserId).in('unique_key', uniqueKeys);
+  }
+  await supabase.from('notifications').update({ user_id: targetUserId }).eq('user_id', guestUserId);
+
+  await supabase.from('users').update({
+    account_locked: true,
+    failed_login_attempts: 0,
+    lockout_end_time: null,
+    first_failed_login_time: null,
+  }).eq('id', guestUserId);
+
+  for (const leagueId of leagueIds) {
+    await recalcLeagueStandings(supabase, leagueId);
+    await ensureAllLeagueH2hMatchups(supabase, leagueId, true);
+    await recalcH2h(supabase, leagueId);
+  }
+
+  return { guest, target, leagueIds };
 }
 
 async function recalcLeagueStandings(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId: number, lastMatchdayId?: number) {
@@ -705,16 +801,48 @@ function roundRobinPairs(memberIds: number[], roundNumber: number) {
 async function ensureH2hMatchups(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   leagueId: number,
-  matchdayId: number
+  matchdayId: number,
+  forceRegenerate = false,
 ) {
   const [{ data: league }, { data: matchday }, { data: members }] = await Promise.all([
-    supabase.from('leagues').select('h2h_leaderboard_enabled,h2h_knockout_enabled').eq('id', leagueId).single(),
-    supabase.from('matchdays').select('id,number').eq('id', matchdayId).single(),
+    supabase.from('leagues').select('h2h_leaderboard_enabled,h2h_knockout_enabled,created_at').eq('id', leagueId).single(),
+    supabase.from('matchdays').select('id,number,start_date,end_date').eq('id', matchdayId).single(),
     supabase.from('league_members').select('user_id').eq('league_id', leagueId).order('user_id'),
   ]);
-  if (!league || !matchday || !members?.length) return;
+  if (!league || !matchday) return;
+
+  const matchupCutoff = new Date(matchday.end_date || matchday.start_date).getTime();
+  const leagueCreatedAt = new Date(league.created_at).getTime();
+  if (matchupCutoff < leagueCreatedAt || !members || members.length < 2) {
+    await supabase.from('h2h_matchups').delete().eq('league_id', leagueId).eq('matchday_id', matchdayId);
+    return;
+  }
 
   const memberIds = members.map((member: any) => member.user_id);
+  const [{ data: existingMatchups }, { data: fixtures }] = await Promise.all([
+    supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('matchday_id', matchdayId),
+    supabase.from('fixtures').select('status').eq('matchday_id', matchdayId),
+  ]);
+  const matchdayComplete = !!fixtures?.length && fixtures.every((fixture: any) => fixture.status === 'COMPLETED');
+  const existingParticipantIds = new Set(
+    (existingMatchups || []).flatMap((matchup: any) => [matchup.player1_id, matchup.player2_id]).filter(Boolean),
+  );
+  const expectedMatchupCount = Math.ceil(memberIds.length / 2);
+  const membershipChanged = memberIds.some((id: number) => !existingParticipantIds.has(id))
+    || [...existingParticipantIds].some((id) => !memberIds.includes(Number(id)))
+    || (existingMatchups || []).some((matchup: any) => matchup.format === 'LEADERBOARD')
+      && (existingMatchups || []).filter((matchup: any) => matchup.format === 'LEADERBOARD').length !== expectedMatchupCount
+    || (existingMatchups || []).some((matchup: any) => matchup.format === 'KNOCKOUT')
+      && (existingMatchups || []).filter((matchup: any) => matchup.format === 'KNOCKOUT').length !== expectedMatchupCount;
+  const onePlayerBootstrap = !!existingMatchups?.length && existingParticipantIds.size < 2;
+
+  if (onePlayerBootstrap && matchdayComplete) {
+    await supabase.from('h2h_matchups').delete().eq('league_id', leagueId).eq('matchday_id', matchdayId);
+    return;
+  }
+  if ((forceRegenerate || membershipChanged) && !matchdayComplete) {
+    await supabase.from('h2h_matchups').delete().eq('league_id', leagueId).eq('matchday_id', matchdayId);
+  }
   if (league.h2h_leaderboard_enabled) {
     const { count } = await supabase
       .from('h2h_matchups')
@@ -760,12 +888,16 @@ async function ensureH2hMatchups(
   }
 }
 
-async function ensureAllLeagueH2hMatchups(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId: number) {
+async function ensureAllLeagueH2hMatchups(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  leagueId: number,
+  forceRegenerate = false,
+) {
   const { data: league } = await supabase.from('leagues').select('division_id').eq('id', leagueId).single();
   if (!league) return;
   const { data: matchdays } = await supabase.from('matchdays').select('id').eq('division_id', league.division_id).order('number');
   for (const matchday of matchdays || []) {
-    await ensureH2hMatchups(supabase, leagueId, matchday.id);
+    await ensureH2hMatchups(supabase, leagueId, matchday.id, forceRegenerate);
   }
 }
 
@@ -784,9 +916,10 @@ async function recalcH2h(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId
     const p2 = matchup.player2_id ? await totalPredictionPoints(supabase, leagueId, matchup.player2_id, matchup.matchday_id) : 0;
     const matchdayFixtures = (fixtureRows || []).filter((fixture: any) => fixture.matchday_id === matchup.matchday_id);
     const resolved = matchdayFixtures.length > 0 && matchdayFixtures.every((fixture: any) => fixture.status === 'COMPLETED');
-    const p1H2h = resolved ? (!matchup.player2_id || p1 > p2 ? 3 : p1 === p2 ? 1 : 0) : null;
-    const p2H2h = resolved ? (!matchup.player2_id ? 0 : p2 > p1 ? 3 : p1 === p2 ? 1 : 0) : null;
-    const winnerId = resolved ? (!matchup.player2_id || p1 > p2 ? matchup.player1_id : p2 > p1 ? matchup.player2_id : null) : null;
+    const isBye = !matchup.player2_id;
+    const p1H2h = resolved ? (isBye ? (matchup.format === 'KNOCKOUT' ? 3 : 0) : p1 > p2 ? 3 : p1 === p2 ? 1 : 0) : null;
+    const p2H2h = resolved ? (isBye ? 0 : p2 > p1 ? 3 : p1 === p2 ? 1 : 0) : null;
+    const winnerId = resolved ? (isBye ? (matchup.format === 'KNOCKOUT' ? matchup.player1_id : null) : p1 > p2 ? matchup.player1_id : p2 > p1 ? matchup.player2_id : null) : null;
 
     await supabase.from('h2h_matchups').update({
       player1_points: p1,
@@ -803,7 +936,7 @@ async function recalcH2h(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId
 
   for (const member of members || []) {
     const userId = member.user_id;
-    const played = (allMatchups || []).filter((m: any) => m.player1_id === userId || m.player2_id === userId);
+    const played = (allMatchups || []).filter((m: any) => m.player2_id && (m.player1_id === userId || m.player2_id === userId));
     const h2hPoints = played.reduce((sum: number, m: any) => sum + (m.player1_id === userId ? m.player1_h2h_points || 0 : m.player2_h2h_points || 0), 0);
     const predictionPoints = played.reduce((sum: number, m: any) => sum + (m.player1_id === userId ? m.player1_points || 0 : m.player2_points || 0), 0);
 
@@ -1356,6 +1489,77 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
     }
   }
 
+  if (path[0] === 'guest-claims') {
+    if (path.length === 1 && request.method === 'POST') {
+      const guestUserId = Number(body?.guestUserId || 0);
+      const leagueId = Number(body?.leagueId || 0);
+      if (!guestUserId || !leagueId) return fail('Guest and league are required');
+      if (!await canManageLeague(supabase, leagueId, user)) return fail('Only the league creator or admin can create claim links', 403);
+
+      const [{ data: guest }, { data: member }] = await Promise.all([
+        supabase.from('users').select('*').eq('id', guestUserId).eq('is_guest', true).single(),
+        supabase.from('league_members').select('user_id').eq('league_id', leagueId).eq('user_id', guestUserId).maybeSingle(),
+      ]);
+      if (!guest) return fail('Guest user not found', 404);
+      if (!member) return fail('Guest is not in this league', 404);
+
+      const { data, error } = await supabase.from('guest_claims').insert({
+        guest_user_id: guestUserId,
+        created_by: user.id,
+        claim_token: crypto.randomUUID(),
+        expires_at: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      }).select('*').single();
+      if (isMissingSchema(error)) return fail('Apply supabase/migrations/010_guest_claims.sql to enable guest claiming.', 500);
+      if (error) return fail(error.message);
+
+      return json({
+        token: data.claim_token,
+        claimUrl: `${request.nextUrl.origin}/claim-guest?token=${data.claim_token}`,
+        expiresAt: data.expires_at,
+        guest: publicUser(guest),
+      }, 201);
+    }
+
+    if (path.length === 2 && request.method === 'GET') {
+      const token = path[1];
+      const { data, error } = await supabase
+        .from('guest_claims')
+        .select('*, guest:users!guest_claims_guest_user_id_fkey(id,username,email,is_guest)')
+        .eq('claim_token', token)
+        .maybeSingle();
+      if (isMissingSchema(error)) return fail('Apply supabase/migrations/010_guest_claims.sql to enable guest claiming.', 500);
+      if (error) return fail(error.message);
+      if (!data) return fail('Claim link not found', 404);
+      return json({
+        guest: publicUser(data.guest),
+        expiresAt: data.expires_at,
+        claimedAt: data.claimed_at,
+        expired: new Date(data.expires_at).getTime() < Date.now(),
+      });
+    }
+
+    if (path.length === 3 && path[2] === 'claim' && request.method === 'POST') {
+      const token = path[1];
+      const { data: claim, error } = await supabase.from('guest_claims').select('*').eq('claim_token', token).maybeSingle();
+      if (isMissingSchema(error)) return fail('Apply supabase/migrations/010_guest_claims.sql to enable guest claiming.', 500);
+      if (error) return fail(error.message);
+      if (!claim) return fail('Claim link not found', 404);
+      if (claim.claimed_at) return fail('This guest has already been claimed', 400);
+      if (new Date(claim.expires_at).getTime() < Date.now()) return fail('This claim link has expired', 400);
+
+      const result = await mergeGuestIntoUser(supabase, claim.guest_user_id, user.id);
+      await supabase.from('guest_claims').update({
+        claimed_by: user.id,
+        claimed_at: new Date().toISOString(),
+      }).eq('id', claim.id);
+
+      return json({
+        message: `${result.guest.username} is now linked to your account.`,
+        transferredLeagues: result.leagueIds.length,
+      });
+    }
+  }
+
   if (path[0] === 'sports' && request.method === 'GET') {
     const { data } = await supabase.from('sports').select('*').order('name');
     return json(data || []);
@@ -1440,9 +1644,7 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
       const { data: league } = await supabase.from('leagues').select('*').eq('code', String(body.code || '').toUpperCase()).single();
       if (!league) return fail('League not found', 404);
       const { data: existingMember } = await supabase.from('league_members').select('user_id').eq('league_id', league.id).eq('user_id', user.id).maybeSingle();
-      await supabase.from('league_members').upsert({ league_id: league.id, user_id: user.id }, { onConflict: 'league_id,user_id' });
-      await supabase.from('league_standings').upsert({ league_id: league.id, user_id: user.id }, { onConflict: 'league_id,user_id' });
-      await supabase.from('h2h_standings').upsert({ league_id: league.id, user_id: user.id }, { onConflict: 'league_id,user_id' });
+      await addLeagueMember(supabase, league.id, user.id);
       if (!existingMember) {
         await addActivity(supabase, {
           leagueId: league.id,
@@ -1464,6 +1666,97 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
     }
 
     const leagueId = asInt(path[1]);
+
+    if (path[2] === 'manage' && path[3] === 'users' && request.method === 'GET') {
+      if (!await canManageLeague(supabase, leagueId, user)) return fail('Only the league creator can manage members', 403);
+      const search = request.nextUrl.searchParams.get('search')?.trim();
+      let query = supabase.from('users').select('*').eq('is_guest', false).order('username').limit(100);
+      if (search) query = query.or(`username.ilike.%${search}%,email.ilike.%${search}%`);
+      const { data, error } = await query;
+      if (error) return fail(error.message);
+      return json((data || []).map(publicUser));
+    }
+
+    if (path[2] === 'members' && path.length === 3 && request.method === 'POST') {
+      if (!await canManageLeague(supabase, leagueId, user)) return fail('Only the league creator can add members', 403);
+      let memberUserId = Number(body?.userId || 0);
+      let memberUser = null;
+
+      if (memberUserId) {
+        const { data, error } = await supabase.from('users').select('*').eq('id', memberUserId).eq('is_guest', false).single();
+        if (error || !data) return fail('Registered user not found', 404);
+        memberUser = data;
+      } else {
+        if (!body?.displayName?.trim()) return fail('Guest display name is required');
+        memberUser = await createGuestUser(supabase, body.displayName.trim(), body.email);
+        memberUserId = memberUser.id;
+      }
+
+      await addLeagueMember(supabase, leagueId, memberUserId);
+      const { data: league } = await supabase.from('leagues').select('name').eq('id', leagueId).single();
+      await addActivity(supabase, {
+        leagueId,
+        type: 'member_joined',
+        actorId: memberUserId,
+        uniqueKey: `creator-member-added:${leagueId}:${memberUserId}`,
+        message: `${memberUser?.username || body?.displayName || 'A member'} joined ${league?.name || 'the league'}.`,
+      });
+      return json(publicUser(memberUser), 201);
+    }
+
+    if (path[2] === 'matchdays' && path[4] === 'members' && path[6] === 'predictions') {
+      if (!await canManageLeague(supabase, leagueId, user)) return fail('Only the league creator can manage member predictions', 403);
+      const matchdayId = asInt(path[3]);
+      const memberUserId = asInt(path[5]);
+
+      const { data: member } = await supabase.from('league_members').select('user_id').eq('league_id', leagueId).eq('user_id', memberUserId).maybeSingle();
+      if (!member) return fail('Member is not in this league', 404);
+
+      if (request.method === 'GET') {
+        const { data, error } = await supabase
+          .from('predictions')
+          .select('*, fixture:fixtures(matchday_id)')
+          .eq('league_id', leagueId)
+          .eq('user_id', memberUserId);
+        if (error) return fail(error.message);
+        return json((data || []).filter((prediction: any) => prediction.fixture?.matchday_id === matchdayId).map(predictionDto));
+      }
+
+      if (request.method === 'POST') {
+        const { data: matchday } = await supabase.from('matchdays').select('*').eq('id', matchdayId).single();
+        if (!matchday) return fail('Matchday not found', 404);
+        if (!matchdayDto(matchday).predictionsOpen) return fail('Predictions are closed for this matchday and cannot be added or edited', 400);
+
+        const rows = Array.isArray(body?.predictions) ? body.predictions : [];
+        const saved = [];
+        const rules = await scoringRules(supabase);
+        for (const row of rows) {
+          const { data: fixture } = await supabase.from('fixtures').select('*').eq('id', row.fixtureId).eq('matchday_id', matchdayId).single();
+          if (!fixture) return fail(`Fixture ${row.fixtureId} not found`, 404);
+          const prediction = {
+            predicted_home_score: Number(row.predictedHomeScore),
+            predicted_away_score: Number(row.predictedAwayScore),
+            is_joker: row.isJoker === true,
+          };
+          if (prediction.is_joker) await clearJokerForMatchday(supabase, leagueId, memberUserId, matchdayId, row.fixtureId);
+          const { data, error } = await supabase.from('predictions').upsert({
+            fixture_id: row.fixtureId,
+            user_id: memberUserId,
+            league_id: leagueId,
+            ...prediction,
+            points: scorePrediction(prediction, fixture, rules),
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'fixture_id,user_id,league_id' }).select('*').single();
+          if (error) return fail(error.message);
+          saved.push(predictionDto(data));
+        }
+        await recalcLeagueStandings(supabase, leagueId, matchdayId);
+        await recalcH2h(supabase, leagueId, matchdayId);
+        await addPredictionActivity(supabase, leagueId, memberUserId, matchdayId);
+        return json(saved);
+      }
+    }
+
     if (path.length === 2 && request.method === 'GET') {
       const { data } = await supabase.from('leagues').select('*').eq('id', leagueId).single();
       return data ? json(await leagueDto(supabase, data)) : fail('League not found', 404);
@@ -1572,8 +1865,26 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
       if (path[3] === 'matchday' && path[5] === 'my-matchups' && request.method === 'GET') {
         const matchdayId = asInt(path[4]);
         await ensureH2hMatchups(supabase, leagueId, matchdayId);
-        await recalcH2h(supabase, leagueId, matchdayId);
-        const { data } = await supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).eq('matchday_id', matchdayId).or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`);
+        const matchdayIds = [matchdayId];
+        if (request.nextUrl.searchParams.get('includePrevious') === 'true') {
+          const { data: currentMatchday } = await supabase.from('matchdays').select('number,division_id').eq('id', matchdayId).maybeSingle();
+          if (currentMatchday) {
+            const { data: previousMatchday } = await supabase
+              .from('matchdays')
+              .select('id')
+              .eq('division_id', currentMatchday.division_id)
+              .lt('number', currentMatchday.number)
+              .order('number', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (previousMatchday?.id) {
+              matchdayIds.push(previousMatchday.id);
+              await ensureH2hMatchups(supabase, leagueId, previousMatchday.id);
+            }
+          }
+        }
+        for (const id of matchdayIds) await recalcH2h(supabase, leagueId, id);
+        const { data } = await supabase.from('h2h_matchups').select('*').eq('league_id', leagueId).in('matchday_id', matchdayIds).or(`player1_id.eq.${user.id},player2_id.eq.${user.id}`);
         return json(await Promise.all((data || []).map((m: any) => h2hDto(supabase, m))));
       }
 
@@ -1931,6 +2242,19 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
 
   if (path[0] === 'super-admin') {
     if (!requireRole(user, ['SUPER_ADMIN'])) return fail('Forbidden', 403);
+    if (path[1] === 'leagues' && path.length === 2 && request.method === 'GET') {
+      const { data, error } = await supabase.from('leagues').select('*').order('name');
+      if (error) return fail(error.message);
+      return json(await Promise.all((data || []).map((league: any) => leagueDto(supabase, league))));
+    }
+    if (path[1] === 'leagues' && path[3] === 'members' && path.length === 5 && request.method === 'DELETE') {
+      try {
+        await removeLeagueMember(supabase, asInt(path[2]), asInt(path[4]));
+        return json({ message: 'Member removed from league' });
+      } catch (error: any) {
+        return fail(error.message || 'Could not remove member', error.message === 'League not found' ? 404 : 400);
+      }
+    }
     if (path[1] === 'settings' && path[2] === 'app' && request.method === 'PUT') {
       const rows = [
         { key: 'app_name', value: String(body.appName || 'MatchPulse').trim() || 'MatchPulse' },

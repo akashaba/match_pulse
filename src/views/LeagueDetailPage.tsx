@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Trophy, Users, Hash, Clock, CheckCircle, ChevronRight, Calendar, AlertCircle, Edit, Eye, XCircle, Swords, Target, ChevronDown, ChevronUp, History, Copy, Share2 } from 'lucide-react';
+import { Trophy, Users, Hash, Clock, CheckCircle, ChevronRight, Calendar, AlertCircle, Edit, Eye, XCircle, Swords, Target, ChevronDown, ChevronUp, History, Copy, Share2, Settings } from 'lucide-react';
 import { leagueApi } from '../api/leagueApi';
 import { matchdayApi } from '../api/matchdayApi';
 import { predictionApi } from '../api/predictionApi';
@@ -15,9 +15,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
+import { useAuth } from '../context/AuthContext';
 
 const LeagueDetailPage: React.FC = () => {
   const { leagueId } = useParams<{ leagueId: string }>();
+  const { user, isAdmin, isSuperAdmin } = useAuth();
   const [expandedCompleted, setExpandedCompleted] = useState<Record<number, boolean>>({});
   const [copiedInvite, setCopiedInvite] = useState(false);
 
@@ -81,6 +83,7 @@ const LeagueDetailPage: React.FC = () => {
   });
 
   const getInitials = (username: string) => username.slice(0, 2).toUpperCase();
+  const canManageLeague = isAdmin || isSuperAdmin || league?.createdBy.id === user?.id || league?.createdBy.username === user?.username;
 
   const inviteLink = React.useMemo(() => {
     if (!league?.code || typeof window === 'undefined') return '';
@@ -455,6 +458,14 @@ const LeagueDetailPage: React.FC = () => {
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
+                {canManageLeague && (
+                  <Link to={`/leagues/${leagueId}/manage`}>
+                    <Button variant="outline" className="gap-2">
+                      <Settings className="h-4 w-4" />
+                      Manage Members
+                    </Button>
+                  </Link>
+                )}
                 <Button variant="secondary" className="gap-2" onClick={copyInvite}>
                   <Copy className="h-4 w-4" />
                   {copiedInvite ? 'Copied' : 'Copy Invite'}

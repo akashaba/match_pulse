@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Trophy, ArrowLeft, Medal, Target, TrendingUp, Info, Swords, Crown, Users, Copy, Share2, Activity, Download } from 'lucide-react';
+import JSZip from 'jszip';
 import { FaFire, FaBolt, FaBullseye, FaStar } from 'react-icons/fa6';
 import { standingsApi } from '../api/standingsApi';
 import { leagueApi } from '../api/leagueApi';
@@ -13,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { H2hMatchup } from '../types/h2h.types';
+import { canvasToBlob, createH2hImage, createKnockoutImage, downloadBlob } from '../lib/imageExports';
 
 type TabType = 'overall' | 'h2h-leaderboard' | 'h2h-knockout';
 type LeaderboardFilter = 'overall' | 'matchday' | 'last5' | 'exact';
@@ -337,7 +339,7 @@ const StandingsPage: React.FC = () => {
     link.click();
   };
 
-  const generatePagedStandingsImages = () => {
+  const generatePagedStandingsImages = async () => {
     const formatLabel = activeTab === 'overall'
       ? leaderboardFilters.find((filter) => filter.id === leaderboardFilter)?.label || 'Overall'
       : activeTab === 'h2h-leaderboard'
@@ -389,6 +391,7 @@ const StandingsPage: React.FC = () => {
     const pageCount = Math.ceil(rows.length / pageSize);
     const safeTitle = title.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
     const safeFormat = formatLabel.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    const zip = new JSZip();
 
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
       const pageRows = rows.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize);
@@ -488,13 +491,30 @@ const StandingsPage: React.FC = () => {
       ctx.fillText(new Date().toLocaleDateString(), tableX + tableWidth, footerY);
       ctx.textAlign = 'left';
 
-      const link = document.createElement('a');
       const pageNumber = String(pageIndex + 1).padStart(2, '0');
       const totalPages = String(pageCount).padStart(2, '0');
-      link.download = `${safeTitle}-${safeFormat}-standings-${pageNumber}-of-${totalPages}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
+      zip.file(
+        `${safeTitle}-${safeFormat}-standings-${pageNumber}-of-${totalPages}.png`,
+        await canvasToBlob(canvas)
+      );
     }
+    downloadBlob(await zip.generateAsync({ type: 'blob' }), `${safeTitle}-${safeFormat}-standings.zip`);
+  };
+
+  const downloadH2hFixtures = async () => {
+    if (!h2hMatchups?.length) return;
+    const blob = await createH2hImage(
+      `${league?.name || 'League'} H2H Fixtures`,
+      'Head to head pairings',
+      h2hMatchups
+    );
+    downloadBlob(blob, `${(league?.name || 'league').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-h2h-fixtures.png`);
+  };
+
+  const downloadKnockoutFixtures = async () => {
+    if (!knockoutBracket?.length) return;
+    const blob = await createKnockoutImage(`${league?.name || 'League'} Knockout`, knockoutBracket);
+    downloadBlob(blob, `${(league?.name || 'league').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-knockout-bracket.png`);
   };
 
   const getFormClass = (tone?: string) => {
@@ -1045,11 +1065,15 @@ const StandingsPage: React.FC = () => {
               {/* Recent H2H Matchups */}
               {h2hMatchups && h2hMatchups.length > 0 && (
                 <Card className="bg-card/80 backdrop-blur-sm mb-6">
-                  <CardHeader>
+                  <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
                     <CardTitle className="flex items-center gap-2">
                       <Users className="h-5 w-5 text-amber-500" />
                       Recent Matchups
                     </CardTitle>
+                    <Button type="button" variant="outline" size="sm" className="gap-2" onClick={downloadH2hFixtures}>
+                      <Download className="h-4 w-4" />
+                      Download Fixtures
+                    </Button>
                   </CardHeader>
                   <CardContent>
                     <div className="grid gap-3">
@@ -1102,7 +1126,15 @@ const StandingsPage: React.FC = () => {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
             </div>
           ) : knockoutBracket && knockoutBracket.length > 0 ? (
-            <KnockoutBracketView bracket={knockoutBracket} currentUsername={user?.username} />
+            <div className="space-y-4">
+              <div className="flex justify-end">
+                <Button type="button" variant="outline" className="gap-2" onClick={downloadKnockoutFixtures}>
+                  <Download className="h-4 w-4" />
+                  Download Knockout Bracket
+                </Button>
+              </div>
+              <KnockoutBracketView bracket={knockoutBracket} currentUsername={user?.username} />
+            </div>
           ) : (
             <Card className="bg-card/80 backdrop-blur-sm">
               <CardContent className="flex flex-col items-center justify-center py-12">

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Clock, CheckCircle, AlertTriangle, Save, Target, Trophy, Info, Lock, Eye, Edit, Swords, Star } from 'lucide-react';
+import { ArrowLeft, Clock, CheckCircle, AlertTriangle, Save, Target, Trophy, Info, Lock, Eye, Edit, Swords, Star, Download, History } from 'lucide-react';
 import { fixtureApi } from '../api/fixtureApi';
 import { predictionApi } from '../api/predictionApi';
 import { matchdayApi } from '../api/matchdayApi';
@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
+import { createFixtureImage, downloadBlob } from '../lib/imageExports';
 
 interface PredictionInput {
   fixtureId: number;
@@ -129,17 +130,10 @@ const PredictionsPage: React.FC = () => {
 
   const hasH2h = league?.h2hLeaderboardEnabled || league?.h2hKnockoutEnabled;
 
-  // Fetch all H2H matchups for this matchday (to display in a panel)
-  const { data: allMatchdayMatchups } = useQuery({
-    queryKey: ['matchdayAllH2h', leagueId, matchdayId],
-    queryFn: () => h2hApi.getAllMatchupsForMatchday(Number(leagueId), Number(matchdayId)),
-    enabled: !!leagueId && !!matchdayId && hasH2h,
-  });
-
-  // Fetch current user's matchups
+  // Fetch only the current user's current and previous matchups.
   const { data: myMatchups } = useQuery({
     queryKey: ['matchdayMyH2h', leagueId, matchdayId],
-    queryFn: () => h2hApi.getMyMatchupsForMatchday(Number(leagueId), Number(matchdayId)),
+    queryFn: () => h2hApi.getMyMatchupsForMatchday(Number(leagueId), Number(matchdayId), true),
     enabled: !!leagueId && !!matchdayId && hasH2h,
   });
 
@@ -167,6 +161,21 @@ const PredictionsPage: React.FC = () => {
       )}
     </div>
   );
+
+  const exportBaseName = `${league?.name || 'league'}-${matchday?.name || 'gameweek'}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+
+  const downloadGameweekFixtures = async () => {
+    if (!fixtures?.length) return;
+    const blob = await createFixtureImage(
+      `${league?.name || 'League'} Fixtures`,
+      matchday?.name || 'Gameweek',
+      fixtures,
+    );
+    downloadBlob(blob, `${exportBaseName}-fixtures.png`);
+  };
 
   // Initialize predictions from existing data
   React.useEffect(() => {
@@ -520,77 +529,53 @@ const PredictionsPage: React.FC = () => {
           </Card>
         )}
 
-        {/* H2H Matchups Panel */}
-        {hasH2h && allMatchdayMatchups && allMatchdayMatchups.length > 0 && (
-          <div className="mb-6 grid gap-4 lg:grid-cols-2">
-            {/* Leaderboard Matchups */}
-            {league?.h2hLeaderboardEnabled && (() => {
-              const leaderboardMatchups = allMatchdayMatchups.filter(m => m.format === 'LEADERBOARD');
-              if (leaderboardMatchups.length === 0) return null;
-              return (
-                <Card className="bg-card/80 backdrop-blur-sm border-t-4 border-t-amber-500">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-lg">
-                      <Swords className="h-5 w-5 text-amber-500" />
-                      H2H Leaderboard Matchups
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-0">
-                    <div className="space-y-2">
-                      {leaderboardMatchups.map((matchup) => (
-                        <H2hMatchupRow
-                          key={matchup.id}
-                          matchup={matchup}
-                          myMatchups={myMatchups}
-                          getInitials={getInitials}
-                          colorScheme="amber"
-                        />
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })()}
-
-            {/* Knockout Matchups */}
-            {league?.h2hKnockoutEnabled && (() => {
-              const knockoutMatchups = allMatchdayMatchups.filter(m => m.format === 'KNOCKOUT');
-              if (knockoutMatchups.length === 0) return null;
-              return (
-                <Card className="bg-card/80 backdrop-blur-sm border-t-4 border-t-red-500">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-lg">
-                      <Target className="h-5 w-5 text-red-500" />
-                      Knockout Matchups
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pt-0">
-                    <div className="space-y-2">
-                      {knockoutMatchups.map((matchup) => (
-                        <H2hMatchupRow
-                          key={matchup.id}
-                          matchup={matchup}
-                          myMatchups={myMatchups}
-                          getInitials={getInitials}
-                          colorScheme="red"
-                        />
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })()}
-          </div>
-        )}
+        {/* Current user's H2H matchup history */}
+        {hasH2h && myMatchups && myMatchups.length > 0 && (() => {
+          const current = myMatchups.filter((matchup) => matchup.matchdayId === Number(matchdayId));
+          const previousNumber = Math.max(-1, ...myMatchups.filter((matchup) => matchup.matchdayId !== Number(matchdayId)).map((matchup) => matchup.matchdayNumber));
+          const previous = myMatchups.filter((matchup) => matchup.matchdayNumber === previousNumber);
+          const renderMatchupCard = (title: string, items: H2hMatchup[], previousCard = false) => items.length > 0 ? (
+            <Card className={`bg-card/80 backdrop-blur-sm border-t-4 ${previousCard ? 'border-t-slate-400' : 'border-t-amber-500'}`}>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  {previousCard ? <History className="h-5 w-5 text-slate-500" /> : <Swords className="h-5 w-5 text-amber-500" />}
+                  {title}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 pt-0">
+                {items.map((matchup) => (
+                  <div key={matchup.id}>
+                    <Badge variant={matchup.format === 'KNOCKOUT' ? 'destructive' : 'warning'} className="mb-2">
+                      {matchup.format === 'KNOCKOUT' ? 'Knockout' : 'H2H League'}
+                    </Badge>
+                    <H2hMatchupRow matchup={matchup} myMatchups={myMatchups} getInitials={getInitials} colorScheme={matchup.format === 'KNOCKOUT' ? 'red' : 'amber'} />
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null;
+          return (
+            <div className="mb-6 grid gap-4 lg:grid-cols-2">
+              {renderMatchupCard('Your Current Matchup', current)}
+              {renderMatchupCard('Your Previous Matchup', previous, true)}
+            </div>
+          );
+        })()}
 
         {/* Fixtures Card */}
         <Card className="bg-card/80 backdrop-blur-sm mb-6">
-          <CardHeader>
+          <CardHeader className="flex-row items-center justify-between gap-3">
             <CardTitle className="flex items-center gap-2">
               <Trophy className="h-5 w-5 text-primary" />
               {isPredictionsClosed ? 'Your Predictions' : 'Make Your Predictions'}
               {isPredictionsClosed && <Lock className="h-4 w-4 text-muted-foreground" />}
             </CardTitle>
+            {fixtures && fixtures.length > 0 && (
+              <Button variant="outline" size="sm" onClick={downloadGameweekFixtures} className="gap-1.5">
+                <Download className="h-4 w-4" />
+                Fixtures
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
             {fixtures && fixtures.length > 0 ? (

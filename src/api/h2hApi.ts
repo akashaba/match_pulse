@@ -35,8 +35,10 @@ export const h2hApi = {
   },
 
   // Matchday-specific matchups
-  getMyMatchupsForMatchday: async (leagueId: number, matchdayId: number): Promise<H2hMatchup[]> => {
-    const response = await axiosInstance.get(`/api/leagues/${leagueId}/h2h/matchday/${matchdayId}/my-matchups`);
+  getMyMatchupsForMatchday: async (leagueId: number, matchdayId: number, includePrevious = false): Promise<H2hMatchup[]> => {
+    const response = await axiosInstance.get(`/api/leagues/${leagueId}/h2h/matchday/${matchdayId}/my-matchups`, {
+      params: includePrevious ? { includePrevious: true } : {},
+    });
     return response.data;
   },
 

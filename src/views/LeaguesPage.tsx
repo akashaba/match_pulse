@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, UserPlus, Users, Trophy, ChevronRight, Hash, Swords, Target } from 'lucide-react';
 import { leagueApi } from '../api/leagueApi';
@@ -27,7 +27,9 @@ import {
 
 const LeaguesPage: React.FC = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const handledInvite = React.useRef<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [createData, setCreateData] = useState({
@@ -39,14 +41,6 @@ const LeaguesPage: React.FC = () => {
   });
   const [joinCode, setJoinCode] = useState('');
   const [joinError, setJoinError] = useState('');
-
-  React.useEffect(() => {
-    const inviteCode = searchParams.get('join');
-    if (inviteCode) {
-      setJoinCode(inviteCode.toUpperCase().slice(0, 6));
-      setShowJoinModal(true);
-    }
-  }, [searchParams]);
 
   const { data: leagues = [], isLoading } = useQuery({
     queryKey: ['userLeagues'],
@@ -69,16 +63,26 @@ const LeaguesPage: React.FC = () => {
 
   const joinMutation = useMutation({
     mutationFn: leagueApi.joinLeague,
-    onSuccess: () => {
+    onSuccess: (joinedLeague) => {
       queryClient.invalidateQueries({ queryKey: ['userLeagues'] });
       setShowJoinModal(false);
       setJoinCode('');
       setJoinError('');
+      navigate(`/leagues/${joinedLeague.id}`, { replace: true });
     },
     onError: (error: any) => {
       setJoinError(error.response?.data?.message || 'Failed to join league');
+      setShowJoinModal(true);
     },
   });
+
+  React.useEffect(() => {
+    const inviteCode = searchParams.get('join')?.toUpperCase().slice(0, 6);
+    if (!inviteCode || handledInvite.current === inviteCode) return;
+    handledInvite.current = inviteCode;
+    setJoinCode(inviteCode);
+    joinMutation.mutate({ code: inviteCode });
+  }, [searchParams]);
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();

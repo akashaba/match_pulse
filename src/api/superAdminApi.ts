@@ -1,5 +1,6 @@
 import axiosInstance from './axiosConfig';
 import { AppSettings, LoginSettings, ScoringRules } from './settingsApi';
+import { League } from '../types/league.types';
 
 export interface UserProfile {
   id: number;
@@ -10,6 +11,7 @@ export interface UserProfile {
   accountLocked?: boolean;
   failedLoginAttempts?: number;
   lockoutEndTime?: string;
+  isGuest?: boolean;
 }
 
 export interface UpdateUserRoleRequest {
@@ -17,6 +19,16 @@ export interface UpdateUserRoleRequest {
 }
 
 export const superAdminApi = {
+  getAllLeagues: async (): Promise<League[]> => {
+    const response = await axiosInstance.get('/api/super-admin/leagues');
+    return response.data;
+  },
+
+  removeLeagueMember: async (leagueId: number, userId: number): Promise<{ message: string }> => {
+    const response = await axiosInstance.delete(`/api/super-admin/leagues/${leagueId}/members/${userId}`);
+    return response.data;
+  },
+
   getAllUsers: async (): Promise<UserProfile[]> => {
     const response = await axiosInstance.get('/api/super-admin/users');
     return response.data;

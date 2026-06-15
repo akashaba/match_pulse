@@ -10,6 +10,8 @@ import PredictionsPage from './views/PredictionsPage';
 import AdminPage from './views/AdminPage';
 import SuperAdminPage from './views/SuperAdminPage';
 import ProfilePage from './views/ProfilePage';
+import LeagueManagePage from './views/LeagueManagePage';
+import ClaimGuestPage from './views/ClaimGuestPage';
 
 function App() {
   const { isAuthenticated } = useAuth();
@@ -57,6 +59,14 @@ function App() {
         }
       />
       <Route
+        path="/leagues/:leagueId/manage"
+        element={
+          <ProtectedRoute>
+            <LeagueManagePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/leagues/:leagueId/matchdays/:matchdayId"
         element={
           <ProtectedRoute>
@@ -85,6 +95,14 @@ function App() {
         element={
           <ProtectedRoute>
             <ProfilePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/claim-guest"
+        element={
+          <ProtectedRoute>
+            <ClaimGuestPage />
           </ProtectedRoute>
         }
       />

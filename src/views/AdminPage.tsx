@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 type AdminTab = 'divisions' | 'teams' | 'matchdays' | 'fixtures' | 'results' | 'league-members';
 
 const clampScore = (value: number) => Math.max(0, Math.min(99, Number.isFinite(value) ? value : 0));
+const getTeamToken = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
 
 const toUtcIsoString = (localDateTime: string) => new Date(localDateTime).toISOString();
 
@@ -1670,64 +1671,90 @@ const AdminPage: React.FC = () => {
                     <p className="text-muted-foreground">Please select a matchday first</p>
                   ) : fixtures && fixtures.length > 0 ? (
                     <div className="space-y-4">
-                      {fixtures.map((fixture: Fixture) => (
-                        <div key={fixture.id} className={cn(
-                          "p-4 rounded-lg",
-                          fixture.status === 'COMPLETED' ? "bg-primary/5 border border-primary/20" : "bg-muted/50"
-                        )}>
-                          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-                            <span className="font-semibold text-foreground text-right min-w-[140px]">{fixture.homeTeam.name}</span>
-                            <div className="flex items-center gap-2">
-                              <Input
-                                type="number"
-                                min={0}
-                                className="w-16 text-center font-bold"
-                                placeholder="0"
-                                value={resultForm[fixture.id]?.homeScore ?? fixture.homeScore ?? ''}
-                                onChange={(e) => setResultForm({
-                                  ...resultForm,
-                                  [fixture.id]: {
-                                    ...resultForm[fixture.id],
-                                    homeScore: parseInt(e.target.value) || 0,
-                                    awayScore: resultForm[fixture.id]?.awayScore ?? fixture.awayScore ?? 0,
-                                  }
-                                })}
-                              />
-                              <span className="text-muted-foreground">-</span>
-                              <Input
-                                type="number"
-                                min={0}
-                                className="w-16 text-center font-bold"
-                                placeholder="0"
-                                value={resultForm[fixture.id]?.awayScore ?? fixture.awayScore ?? ''}
-                                onChange={(e) => setResultForm({
-                                  ...resultForm,
-                                  [fixture.id]: {
-                                    ...resultForm[fixture.id],
-                                    homeScore: resultForm[fixture.id]?.homeScore ?? fixture.homeScore ?? 0,
-                                    awayScore: parseInt(e.target.value) || 0,
-                                  }
-                                })}
-                              />
-                            </div>
-                            <span className="font-semibold text-foreground text-left min-w-[140px]">{fixture.awayTeam.name}</span>
-                            <Button
-                              size="sm"
-                              onClick={() => handleUpdateResult(fixture.id)}
-                              disabled={updateResultMutation.isPending}
-                              className="gap-1"
-                            >
-                              <Save className="h-4 w-4" />
-                              Save
-                            </Button>
+                      {fixtures.map((fixture: Fixture) => {
+                        const selectedMatchday = matchdays?.find((md: Matchday) => md.id === selectedMatchdayId);
+                        const dateValue = fixture.kickoffAt || selectedMatchday?.startDate;
+                        const fixtureDate = dateValue ? new Date(dateValue) : null;
+                        const homeScore = resultForm[fixture.id]?.homeScore ?? fixture.homeScore ?? 0;
+                        const awayScore = resultForm[fixture.id]?.awayScore ?? fixture.awayScore ?? 0;
+                        const renderTeamBadge = (team: Fixture['homeTeam']) => (
+                          <div className="team-token overflow-hidden">
+                            {team.badgeUrl ? (
+                              <img src={team.badgeUrl} alt={`${team.name} badge`} className="h-full w-full object-contain" />
+                            ) : getTeamToken(team.name)}
                           </div>
-                          {fixture.status === 'COMPLETED' && (
-                            <p className="text-center mt-2 text-primary text-xs flex items-center justify-center gap-1">
-                              <CheckCircle className="h-3 w-3" /> Result saved
-                            </p>
-                          )}
-                        </div>
-                      ))}
+                        );
+
+                        return (
+                          <div key={fixture.id} className="fixture-strip overflow-hidden rounded-lg transition-transform hover:-translate-y-0.5">
+                            <div className="grid md:grid-cols-[1fr_15rem]">
+                              <div className="grid gap-4 px-5 py-5 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+                                <div className="flex flex-col items-center gap-2 text-center sm:items-end sm:text-right">
+                                  {renderTeamBadge(fixture.homeTeam)}
+                                  <span className="text-sm font-black uppercase text-slate-900 sm:text-base">{fixture.homeTeam.name}</span>
+                                </div>
+
+                                <div className="flex flex-col items-center gap-3">
+                                  <Badge variant={fixture.status === 'COMPLETED' ? 'success' : 'secondary'}>
+                                    {fixture.status === 'COMPLETED' ? 'Result saved' : 'Enter result'}
+                                  </Badge>
+                                  <div className="flex items-center justify-center gap-2">
+                                    <AdminScoreStepper
+                                      label={`${fixture.homeTeam.name} score`}
+                                      value={homeScore}
+                                      onChange={(score) => setResultForm((previous) => ({
+                                        ...previous,
+                                        [fixture.id]: { homeScore: score, awayScore },
+                                      }))}
+                                    />
+                                    <span className="text-2xl font-black text-slate-400">VS</span>
+                                    <AdminScoreStepper
+                                      label={`${fixture.awayTeam.name} score`}
+                                      value={awayScore}
+                                      onChange={(score) => setResultForm((previous) => ({
+                                        ...previous,
+                                        [fixture.id]: { homeScore, awayScore: score },
+                                      }))}
+                                    />
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleUpdateResult(fixture.id)}
+                                    disabled={updateResultMutation.isPending}
+                                    className="gap-1"
+                                  >
+                                    <Save className="h-4 w-4" />
+                                    Save Result
+                                  </Button>
+                                </div>
+
+                                <div className="flex flex-col items-center gap-2 text-center sm:items-start sm:text-left">
+                                  {renderTeamBadge(fixture.awayTeam)}
+                                  <span className="text-sm font-black uppercase text-slate-900 sm:text-base">{fixture.awayTeam.name}</span>
+                                </div>
+                              </div>
+
+                              <div className="fixture-strip-side flex flex-col items-center justify-center gap-1 px-6 py-5 text-center">
+                                <span className="text-sm font-semibold uppercase tracking-normal text-white/85">
+                                  {fixtureDate && !Number.isNaN(fixtureDate.getTime())
+                                    ? fixtureDate.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })
+                                    : 'Matchday'}
+                                </span>
+                                <span className="text-3xl font-black">
+                                  {fixture.status === 'COMPLETED'
+                                    ? 'RESULT'
+                                    : fixtureDate && !Number.isNaN(fixtureDate.getTime())
+                                      ? fixtureDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+                                      : 'TBD'}
+                                </span>
+                                <span className="text-xs font-bold uppercase text-white/70">
+                                  {fixture.status === 'COMPLETED' ? `${fixture.homeScore} - ${fixture.awayScore}` : 'Awaiting score'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     renderAdminEmpty(<Target className="h-7 w-7" />, 'No results to update', 'Fixtures will appear here after you select a matchday with scheduled games.')

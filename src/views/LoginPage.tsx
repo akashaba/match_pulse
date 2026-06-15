@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Eye, EyeOff, Lock, UserRound } from 'lucide-react';
 import { authApi } from '../api/authApi';
@@ -29,7 +29,10 @@ const LoginPage: React.FC<LoginPageProps> = ({ initialMode = 'login' }) => {
   const [lockoutCountdown, setLockoutCountdown] = useState('');
 
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { login } = useAuth();
+  const requestedReturnTo = searchParams.get('returnTo');
+  const returnTo = requestedReturnTo?.startsWith('/') && !requestedReturnTo.startsWith('//') ? requestedReturnTo : '/';
 
   const { data: loginSettings } = useQuery({
     queryKey: ['login-settings'],
@@ -71,7 +74,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ initialMode = 'login' }) => {
     onSuccess: (data) => {
       setLockoutEndTime(null);
       login(data);
-      navigate('/');
+      navigate(returnTo, { replace: true });
     },
     onError: (error: any) => {
       const status = error.response?.status;
@@ -90,7 +93,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ initialMode = 'login' }) => {
     mutationFn: (request: RegisterRequest) => authApi.register(request),
     onSuccess: (data) => {
       login(data);
-      navigate('/?welcome=1');
+      navigate(returnTo === '/' ? '/?welcome=1' : returnTo, { replace: true });
     },
     onError: (error: any) => {
       setError(error.response?.data?.message || 'Registration failed');
