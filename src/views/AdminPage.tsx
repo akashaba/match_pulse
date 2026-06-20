@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { getFixtureKickoffTime, isFixturePredictionOpen } from '../lib/predictionDeadlines';
 
 type AdminTab = 'divisions' | 'teams' | 'matchdays' | 'fixtures' | 'results' | 'league-members';
 
@@ -138,7 +139,6 @@ const AdminPage: React.FC = () => {
     name: '',
     number: 1,
     startDate: '',
-    endDate: '',
   });
 
   // Fixture form state
@@ -161,6 +161,7 @@ const AdminPage: React.FC = () => {
   });
   const [adminPredictions, setAdminPredictions] = useState<Record<number, { home: number; away: number }>>({});
   const [adminJokerFixtureId, setAdminJokerFixtureId] = useState<number | null>(null);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   // Queries
   const { data: sports } = useQuery({
@@ -210,13 +211,17 @@ const AdminPage: React.FC = () => {
   });
 
   const selectedLeagueMatchday = leagueMatchdays?.find((matchday) => matchday.id === selectedLeagueMatchdayId);
-  const adminPredictionsLocked = !!selectedLeagueMatchday && !selectedLeagueMatchday.predictionsOpen;
 
   const { data: leagueFixtures } = useQuery({
     queryKey: ['leagueFixtures', selectedLeagueMatchdayId],
     queryFn: () => fixtureApi.getFixturesByMatchday(selectedLeagueMatchdayId!),
     enabled: !!selectedLeagueMatchdayId,
   });
+  const openLeagueFixtures = React.useMemo(
+    () => (leagueFixtures || []).filter((fixture) => isFixturePredictionOpen(fixture, selectedLeagueMatchday, currentTime)),
+    [leagueFixtures, selectedLeagueMatchday, currentTime]
+  );
+  const adminPredictionsLocked = !!leagueFixtures?.length && openLeagueFixtures.length === 0;
 
   const { data: selectedMemberPredictions } = useQuery({
     queryKey: ['adminMemberPredictions', selectedLeagueId, selectedLeagueMatchdayId, selectedLeagueMemberId],
@@ -326,7 +331,7 @@ const AdminPage: React.FC = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['matchdays'] });
       setSuccess('Matchday created successfully!');
-      setMatchdayForm({ name: '', number: 1, startDate: '', endDate: '' });
+      setMatchdayForm({ name: '', number: 1, startDate: '' });
       setTimeout(() => setSuccess(null), 3000);
     },
     onError: (err: any) => {
@@ -479,6 +484,11 @@ const AdminPage: React.FC = () => {
     setAdminPredictions(loaded);
     setAdminJokerFixtureId(existingJoker?.fixtureId ?? null);
   }, [leagueFixtures, selectedMemberPredictions]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setCurrentTime(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   // Handlers
   const handleCreateDivision = (e: React.FormEvent) => {
@@ -648,7 +658,6 @@ const AdminPage: React.FC = () => {
       number: matchdayForm.number,
       divisionId: selectedDivisionId,
       startDate: toUtcIsoString(matchdayForm.startDate),
-      endDate: matchdayForm.endDate ? toUtcIsoString(matchdayForm.endDate) : undefined,
     };
     createMatchdayMutation.mutate(request);
   };
@@ -769,8 +778,8 @@ const AdminPage: React.FC = () => {
   };
 
   const handleSaveMemberPredictions = () => {
-    if (adminPredictionsLocked) {
-      setError('Predictions are closed for this matchday and can no longer be added or edited.');
+    if (!openLeagueFixtures.length) {
+      setError('No fixtures are currently open for prediction entry.');
       return;
     }
     if (!leagueFixtures || leagueFixtures.length === 0) {
@@ -778,7 +787,7 @@ const AdminPage: React.FC = () => {
       return;
     }
 
-    const predictions = leagueFixtures.map((fixture) => ({
+    const predictions = openLeagueFixtures.map((fixture) => ({
       fixtureId: fixture.id,
       predictedHomeScore: adminPredictions[fixture.id]?.home ?? 0,
       predictedAwayScore: adminPredictions[fixture.id]?.away ?? 0,
@@ -1309,21 +1318,13 @@ const AdminPage: React.FC = () => {
                         />
                       </div>
                     </div>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <DateTimeField
-                        id="startDate"
-                        label="Gameweek starts"
-                        value={matchdayForm.startDate}
-                        onChange={(startDate) => setMatchdayForm({ ...matchdayForm, startDate })}
-                        required
-                      />
-                      <DateTimeField
-                        id="endDate"
-                        label="Prediction deadline (optional)"
-                        value={matchdayForm.endDate}
-                        onChange={(endDate) => setMatchdayForm({ ...matchdayForm, endDate })}
-                      />
-                    </div>
+                    <DateTimeField
+                      id="startDate"
+                      label="Gameweek starts"
+                      value={matchdayForm.startDate}
+                      onChange={(startDate) => setMatchdayForm({ ...matchdayForm, startDate })}
+                      required
+                    />
                     <Button
                       type="submit"
                       disabled={!selectedDivisionId || createMatchdayMutation.isPending}
@@ -1353,12 +1354,13 @@ const AdminPage: React.FC = () => {
                                 {getStatusBadge(effectiveStatus)}
                                 {matchday.predictionsOpen && (
                                   <span className="text-primary text-xs flex items-center gap-1">
-                                    <CheckCircle className="h-3 w-3" /> Open
+                                    <CheckCircle className="h-3 w-3" /> Active
                                   </span>
                                 )}
                               </div>
                               <p className="text-sm text-muted-foreground">
-                                Deadline: {new Date(matchday.endDate || matchday.startDate).toLocaleString()}
+                                Starts: {new Date(matchday.startDate).toLocaleString()}
+                                {matchday.endDate ? ` - Ends: ${new Date(matchday.endDate).toLocaleString()}` : ''}
                               </p>
                             </div>
                             <Select
@@ -1953,8 +1955,8 @@ const AdminPage: React.FC = () => {
                           <div className="flex items-start gap-3 rounded-2xl border border-amber-300/70 bg-amber-50/80 p-4 text-amber-900">
                             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
                             <div>
-                              <p className="font-bold">Predictions are closed</p>
-                              <p className="text-sm">The member's saved picks are read-only. Admins cannot add or edit predictions after the deadline.</p>
+                              <p className="font-bold">No fixtures are open</p>
+                              <p className="text-sm">Saved picks are read-only once each fixture reaches its five-minute pre-kickoff cutoff.</p>
                             </div>
                           </div>
                         )}
@@ -1977,6 +1979,9 @@ const AdminPage: React.FC = () => {
 
                         {leagueFixtures.map((fixture: Fixture) => {
                           const isJokerFixture = adminJokerFixtureId === fixture.id;
+                          const fixtureOpen = isFixturePredictionOpen(fixture, selectedLeagueMatchday, currentTime);
+                          const fixtureKickoffTime = getFixtureKickoffTime(fixture, selectedLeagueMatchday);
+                          const fixtureDate = fixtureKickoffTime ? new Date(fixtureKickoffTime) : null;
                           const teamToken = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
                           const teamBadge = (team: Fixture['homeTeam']) => (
                             <div className="team-token overflow-hidden">
@@ -2005,8 +2010,8 @@ const AdminPage: React.FC = () => {
 
                                   <div className="flex flex-col items-center gap-3">
                                     <div className="flex flex-wrap items-center justify-center gap-2">
-                                      <Badge variant={fixture.status === 'COMPLETED' ? 'success' : 'secondary'}>
-                                        {fixture.status === 'COMPLETED' ? `Final ${fixture.homeScore}-${fixture.awayScore}` : 'Prediction Entry'}
+                                      <Badge variant={fixture.status === 'COMPLETED' ? 'success' : fixtureOpen ? 'secondary' : 'warning'}>
+                                        {fixture.status === 'COMPLETED' ? `Final ${fixture.homeScore}-${fixture.awayScore}` : fixtureOpen ? 'Prediction Entry' : 'Locked'}
                                       </Badge>
                                       {isJokerFixture && (
                                         <Badge variant="warning" className="font-black">
@@ -2021,14 +2026,14 @@ const AdminPage: React.FC = () => {
                                         label={`${fixture.homeTeam.name} score`}
                                         value={adminPredictions[fixture.id]?.home}
                                         onChange={(score) => setAdminPredictionScore(fixture.id, 'home', score)}
-                                        disabled={adminPredictionsLocked}
+                                        disabled={!fixtureOpen}
                                       />
                                       <span className="text-2xl font-black text-slate-400">VS</span>
                                       <AdminScoreStepper
                                         label={`${fixture.awayTeam.name} score`}
                                         value={adminPredictions[fixture.id]?.away}
                                         onChange={(score) => setAdminPredictionScore(fixture.id, 'away', score)}
-                                        disabled={adminPredictionsLocked}
+                                        disabled={!fixtureOpen}
                                       />
                                     </div>
 
@@ -2036,7 +2041,7 @@ const AdminPage: React.FC = () => {
                                       size="sm"
                                       variant={isJokerFixture ? 'warning' : 'outline'}
                                       onClick={() => setAdminJokerFixtureId(isJokerFixture ? null : fixture.id)}
-                                      disabled={adminPredictionsLocked}
+                                      disabled={!fixtureOpen}
                                       className="gap-1"
                                     >
                                       <Star className="h-4 w-4" />
@@ -2052,13 +2057,13 @@ const AdminPage: React.FC = () => {
 
                                 <div className="fixture-strip-side flex flex-col items-center justify-center gap-1 px-6 py-5 text-center">
                                   <span className="text-sm font-semibold uppercase tracking-normal text-white/85">
-                                    {selectedLeague?.name || 'League'}
+                                    {fixtureDate ? fixtureDate.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short' }) : selectedLeague?.name || 'League'}
                                   </span>
                                   <span className="text-2xl font-black">
-                                    {fixture.status === 'COMPLETED' ? 'RESULT' : 'ADMIN PICK'}
+                                    {fixture.status === 'COMPLETED' ? 'RESULT' : fixtureOpen ? 'ADMIN PICK' : 'LOCKED'}
                                   </span>
                                   <span className="text-xs font-bold uppercase text-white/70">
-                                    For selected member
+                                    {fixtureDate ? fixtureDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : 'For selected member'}
                                   </span>
                                 </div>
                               </div>
@@ -2067,7 +2072,7 @@ const AdminPage: React.FC = () => {
                         })}
                         <Button
                           onClick={handleSaveMemberPredictions}
-                          disabled={adminPredictionsLocked || saveMemberPredictionsMutation.isPending}
+                          disabled={!openLeagueFixtures.length || saveMemberPredictionsMutation.isPending}
                           className="gap-2"
                         >
                           <Save className="h-4 w-4" />

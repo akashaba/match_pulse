@@ -157,7 +157,6 @@ const LeagueDetailPage: React.FC = () => {
     return status === 'COMPLETED';
   }) || [];
   const nextMatchday = activeMatchdays[0] || completedMatchdays[completedMatchdays.length - 1];
-  const nextDeadline = nextMatchday ? new Date(nextMatchday.endDate || nextMatchday.startDate) : null;
   const nextHasPredicted = nextMatchday ? predictionStatus?.[nextMatchday.id] || false : false;
   const latestWinner = insights?.weeklyWinners?.[0];
   const topFive = standings.slice(0, 5);
@@ -233,7 +232,7 @@ const LeagueDetailPage: React.FC = () => {
               </div>
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Clock className="h-4 w-4" />
-                Deadline: {new Date(matchday.endDate || matchday.startDate).toLocaleString()}
+                Fixture cutoffs: 5 minutes before each kickoff
               </p>
               {/* H2H Matchup Info */}
               {renderH2hMatchups(matchday.id)}
@@ -513,9 +512,9 @@ const LeagueDetailPage: React.FC = () => {
 
                 <div className="grid gap-3 sm:grid-cols-3 lg:w-[24rem] lg:grid-cols-1">
                   <div className="rounded-2xl bg-white/50 p-4">
-                    <p className="text-xs font-bold uppercase text-slate-500">Next deadline</p>
+                    <p className="text-xs font-bold uppercase text-slate-500">Prediction cutoffs</p>
                     <p className="mt-1 text-lg font-black text-slate-900">
-                      {nextDeadline ? nextDeadline.toLocaleString() : 'No deadline set'}
+                      5 min before kickoff
                     </p>
                     <p className="mt-1 text-xs font-semibold text-teal-700">{nextMatchday?.name || 'Awaiting matchday'}</p>
                   </div>
@@ -593,7 +592,7 @@ const LeagueDetailPage: React.FC = () => {
                   </div>
                   <div className="rounded-2xl bg-white/45 p-3">
                     <p className="text-xs font-bold uppercase text-slate-500">Status</p>
-                    <p className="mt-1 text-sm font-black text-slate-900">{nextMatchday?.predictionsOpen ? 'Open' : 'Locked'}</p>
+                    <p className="mt-1 text-sm font-black text-slate-900">{nextMatchday?.predictionsOpen ? 'Fixture-based' : 'Locked'}</p>
                   </div>
                 </div>
               </article>

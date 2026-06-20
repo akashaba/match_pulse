@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 import { createFixtureImage, downloadBlob } from '../lib/imageExports';
+import { getFixtureKickoffTime, getFixturePredictionDeadline, isFixturePredictionOpen } from '../lib/predictionDeadlines';
 
 interface PredictionInput {
   fixtureId: number;
@@ -99,26 +100,31 @@ const PredictionsPage: React.FC = () => {
     enabled: !!leagueId && !!matchdayId,
   });
 
-  const predictionDeadline = matchday ? new Date(matchday.endDate || matchday.startDate) : null;
-  const isPredictionsClosed = (() => {
-    if (!matchday) return true;
-    const deadline = matchday.endDate ? new Date(matchday.endDate) : new Date(matchday.startDate);
-    if (matchday.predictionsOpen !== undefined) {
-      return !matchday.predictionsOpen || currentTime > deadline.getTime();
-    }
-    return currentTime > deadline.getTime();
-  })();
+  const openFixtures = React.useMemo(
+    () => (fixtures || []).filter((fixture) => isFixturePredictionOpen(fixture, matchday, currentTime)),
+    [fixtures, matchday, currentTime]
+  );
+  const nextPredictionDeadline = React.useMemo(() => {
+    const deadlines = openFixtures
+      .map((fixture) => getFixturePredictionDeadline(fixture, matchday))
+      .filter((deadline): deadline is number => deadline !== null && deadline > currentTime)
+      .sort((a, b) => a - b);
+    return deadlines[0] ? new Date(deadlines[0]) : null;
+  }, [openFixtures, matchday, currentTime]);
+  const isPredictionsClosed = !!fixtures && fixtures.length > 0 && openFixtures.length === 0;
 
   const { data: revealedPredictions } = useQuery({
     queryKey: ['allPredictionsReveal', leagueId, matchdayId, isPredictionsClosed],
     queryFn: () => predictionApi.getAllPredictionsForMatchday(Number(matchdayId), Number(leagueId)),
     enabled: !!leagueId && !!matchdayId,
+    refetchInterval: 60_000,
   });
 
   const { data: matchdaySummary } = useQuery({
     queryKey: ['matchdaySummary', leagueId, matchdayId, isPredictionsClosed],
     queryFn: () => standingsApi.getMatchdaySummary(Number(leagueId), Number(matchdayId)),
     enabled: !!leagueId && !!matchdayId,
+    refetchInterval: 60_000,
   });
 
   // Fetch league to check H2H flags
@@ -139,10 +145,9 @@ const PredictionsPage: React.FC = () => {
 
   const getInitials = (username: string) => username.slice(0, 2).toUpperCase();
   const getTeamToken = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
-  const fixtureDate = matchday ? new Date(matchday.startDate) : null;
-  const countdownMs = predictionDeadline ? Math.max(0, predictionDeadline.getTime() - currentTime) : 0;
+  const countdownMs = nextPredictionDeadline ? Math.max(0, nextPredictionDeadline.getTime() - currentTime) : 0;
   const countdownText = (() => {
-    if (!predictionDeadline) return 'Deadline TBC';
+    if (!nextPredictionDeadline) return 'No open fixtures';
     if (countdownMs <= 0) return 'Locked';
     const days = Math.floor(countdownMs / 86400000);
     const hours = Math.floor((countdownMs % 86400000) / 3600000);
@@ -229,11 +234,13 @@ const PredictionsPage: React.FC = () => {
     }));
   };
 
-  const handlePredictionChange = (fixtureId: number, team: 'home' | 'away', value: string) => {
-    setPredictionScore(fixtureId, team, Number.parseInt(value || '0', 10));
-  };
-
   const handleSubmitPrediction = async (fixtureId: number) => {
+    const fixture = fixtures?.find((item) => item.id === fixtureId);
+    if (!fixture || !isFixturePredictionOpen(fixture, matchday, currentTime)) {
+      setError('Predictions are closed for this fixture');
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
     const pred = predictions[fixtureId];
     if (pred === undefined || pred.home === undefined || pred.away === undefined) {
       setError('Please enter both scores');
@@ -257,8 +264,13 @@ const PredictionsPage: React.FC = () => {
 
   const handleSubmitAll = async () => {
     if (!fixtures) return;
+    if (!openFixtures.length) {
+      setError('There are no open fixtures to predict');
+      setTimeout(() => setError(null), 3000);
+      return;
+    }
     
-    const incompleteFixtures = fixtures.filter((f: Fixture) => {
+    const incompleteFixtures = openFixtures.filter((f: Fixture) => {
       const pred = predictions[f.id];
       return !pred || pred.home === undefined || pred.away === undefined;
     });
@@ -270,7 +282,7 @@ const PredictionsPage: React.FC = () => {
     }
 
     try {
-      for (const fixture of fixtures) {
+      for (const fixture of openFixtures) {
         const pred = predictions[fixture.id];
         if (pred) {
           await submitPredictionMutation.mutateAsync({
@@ -289,6 +301,7 @@ const PredictionsPage: React.FC = () => {
   };
 
   const predictedCount = fixtures?.filter((fixture) => predictions[fixture.id]?.home !== undefined && predictions[fixture.id]?.away !== undefined).length || 0;
+  const openPredictedCount = openFixtures.filter((fixture) => predictions[fixture.id]?.home !== undefined && predictions[fixture.id]?.away !== undefined).length;
   const completedCount = fixtures?.filter((fixture) => fixture.status === 'COMPLETED').length || 0;
   const totalPoints = existingPredictions?.reduce((sum: number, prediction: any) => sum + (prediction.points || 0), 0) || 0;
   const predictionsByFixture = React.useMemo(() => {
@@ -349,15 +362,15 @@ const PredictionsPage: React.FC = () => {
               </Link>
               <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/18 px-3 py-1 text-sm font-bold text-white">
                 {isPredictionsClosed ? <Lock className="h-4 w-4" /> : <Target className="h-4 w-4" />}
-                {isPredictionsClosed ? 'Prediction Locked' : `Locks in ${countdownText}`}
+                {isPredictionsClosed ? 'No Open Fixtures' : `Next fixture locks in ${countdownText}`}
               </div>
               <h1 className="text-3xl font-black tracking-normal text-white sm:text-5xl">
                 {matchday?.name || 'Matchday'}
               </h1>
               <p className="mt-3 max-w-xl text-sm font-medium text-white/82 sm:text-base">
                 {isPredictionsClosed
-                  ? 'Predictions are sealed. Check your picks, watch results land, and see how the table moves.'
-                  : 'Pick scores, choose one Joker for double points, and submit before the deadline.'}
+                  ? 'Predictions are sealed for every fixture whose cutoff has passed. Check your picks, watch results land, and see how the table moves.'
+                  : 'Pick scores for fixtures that have not reached their five-minute pre-kickoff cutoff.'}
               </p>
             </div>
             <div className="grid grid-cols-3 gap-2 sm:min-w-[24rem]">
@@ -385,7 +398,7 @@ const PredictionsPage: React.FC = () => {
                   <Lock className="h-7 w-7" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-black text-foreground">Matchday summary unlocks after the deadline</h3>
+                  <h3 className="text-xl font-black text-foreground">Matchday summary unlocks after all fixture cutoffs</h3>
                   <p className="text-sm text-muted-foreground">
                     Best predictor, most picked score, and surprise result stay hidden until everyone is locked in.
                   </p>
@@ -447,7 +460,7 @@ const PredictionsPage: React.FC = () => {
           <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-600 flex items-center gap-2">
             <Clock className="h-5 w-5" />
             <span>
-              <strong>Predictions are closed.</strong> The deadline was {matchday?.endDate ? new Date(matchday.endDate).toLocaleString() : new Date(matchday?.startDate || '').toLocaleString()}.
+              <strong>No fixtures are open for predictions.</strong> Each fixture locks 5 minutes before kickoff.
             </span>
           </div>
         ) : matchday && (
@@ -455,16 +468,16 @@ const PredictionsPage: React.FC = () => {
             <div className="flex items-center gap-2">
               <CheckCircle className="h-5 w-5" />
               <span>
-                <strong>Predictions are open</strong> until {matchday.endDate ? new Date(matchday.endDate).toLocaleString() : new Date(matchday.startDate).toLocaleString()}
+                <strong>{openFixtures.length} fixture{openFixtures.length === 1 ? '' : 's'} open</strong>. Each one locks 5 minutes before kickoff.
               </span>
             </div>
             <div className="rounded-full bg-white/55 px-4 py-2 text-center text-sm font-black text-slate-900">
-              Locks in {countdownText}
+              Next lock: {nextPredictionDeadline ? nextPredictionDeadline.toLocaleString() : countdownText}
             </div>
           </div>
         )}
 
-        {!isPredictionsClosed && fixtures && fixtures.length > 0 && (
+        {openFixtures.length > 0 && (
           <Card className="bg-card/80 backdrop-blur-sm mb-6">
             <CardContent className="p-5">
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -485,7 +498,7 @@ const PredictionsPage: React.FC = () => {
           </Card>
         )}
 
-        {!isPredictionsClosed && fixtures && fixtures.length > 0 && existingPredictions && existingPredictions.length === 0 && (
+        {openFixtures.length > 0 && existingPredictions && existingPredictions.length === 0 && (
           <div className="designed-empty-state mb-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-4">
@@ -494,10 +507,10 @@ const PredictionsPage: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-xl font-black text-foreground">No predictions submitted yet</h3>
-                  <p className="text-sm text-muted-foreground">Fill the score boxes below, pick a Joker, then submit all predictions.</p>
+                  <p className="text-sm text-muted-foreground">Fill the score boxes for open fixtures, pick a Joker, then submit your predictions.</p>
                 </div>
               </div>
-              <Badge variant="warning" className="w-fit text-sm">Deadline active</Badge>
+              <Badge variant="warning" className="w-fit text-sm">{openPredictedCount}/{openFixtures.length} open predicted</Badge>
             </div>
           </div>
         )}
@@ -584,11 +597,15 @@ const PredictionsPage: React.FC = () => {
                   const userPrediction = existingPredictions?.find((p: any) => p.fixtureId === fixture.id);
                   const hasPredicted = !!userPrediction;
                   const isCompleted = fixture.status === 'COMPLETED';
+                  const fixtureOpen = isFixturePredictionOpen(fixture, matchday, currentTime);
+                  const fixtureLocked = !fixtureOpen;
                   const points = userPrediction?.points ?? 0;
                   const isJokerFixture = jokerFixtureId === fixture.id || userPrediction?.isJoker;
                   const fixturePredictions = predictionsByFixture.get(fixture.id) || [];
                   const communityStats = communityScoreStatsByFixture.get(fixture.id) || [];
-                  const communityRevealed = !!revealedPredictions?.revealed;
+                  const communityRevealed = !!revealedPredictions?.revealedFixtureIds?.includes(fixture.id) || !!revealedPredictions?.revealed;
+                  const fixtureKickoffTime = getFixtureKickoffTime(fixture, matchday);
+                  const fixtureDate = fixtureKickoffTime ? new Date(fixtureKickoffTime) : null;
                   
                   return (
                     <div
@@ -608,8 +625,8 @@ const PredictionsPage: React.FC = () => {
 
                           <div className="flex flex-col items-center gap-3">
                             <div className="flex flex-wrap items-center justify-center gap-2">
-                              <Badge variant={isCompleted ? 'success' : isPredictionsClosed ? 'warning' : 'secondary'}>
-                                {isCompleted ? 'Result Final' : isPredictionsClosed ? 'Locked' : 'Open'}
+                              <Badge variant={isCompleted ? 'success' : fixtureLocked ? 'warning' : 'secondary'}>
+                                {isCompleted ? 'Result Final' : fixtureLocked ? 'Locked' : 'Open'}
                               </Badge>
                               <Badge variant={communityRevealed ? 'success' : 'secondary'}>
                                 {communityRevealed ? `${fixturePredictions.length} community picks` : 'Picks hidden'}
@@ -633,18 +650,18 @@ const PredictionsPage: React.FC = () => {
                                   label={`${fixture.homeTeam.name} score`}
                                   value={predictions[fixture.id]?.home}
                                   onChange={(score) => setPredictionScore(fixture.id, 'home', score)}
-                                  disabled={isPredictionsClosed || isCompleted}
+                                  disabled={fixtureLocked || isCompleted}
                                 />
                                 <span className="text-2xl font-black text-slate-400">VS</span>
                                 <ScoreStepper
                                   label={`${fixture.awayTeam.name} score`}
                                   value={predictions[fixture.id]?.away}
                                   onChange={(score) => setPredictionScore(fixture.id, 'away', score)}
-                                  disabled={isPredictionsClosed || isCompleted}
+                                  disabled={fixtureLocked || isCompleted}
                                 />
                               </div>
                             )}
-                            {!isPredictionsClosed && !isCompleted && (
+                            {fixtureOpen && !isCompleted && (
                               <div className="flex flex-wrap justify-center gap-2">
                                 <Button
                                   size="sm"
@@ -681,7 +698,7 @@ const PredictionsPage: React.FC = () => {
                           <span className="text-3xl font-black">
                             {isCompleted ? 'RESULT' : fixtureDate ? fixtureDate.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : 'TBD'}
                           </span>
-                          {isPredictionsClosed && !isCompleted && (
+                          {fixtureLocked && !isCompleted && (
                             <span className="text-xs font-bold uppercase text-white/70">Locked</span>
                           )}
                           {isJokerFixture && (
@@ -727,7 +744,7 @@ const PredictionsPage: React.FC = () => {
                       )}
                       
                       {/* Status indicator for closed but not completed fixtures */}
-                      {isPredictionsClosed && !isCompleted && (
+                      {fixtureLocked && !isCompleted && (
                         <div className="flex items-center justify-center gap-2 border-t border-slate-200 px-5 py-3">
                           {hasPredicted ? (
                             <Badge variant="secondary" className="text-sm">
@@ -793,7 +810,7 @@ const PredictionsPage: React.FC = () => {
               </div>
             )}
 
-            {!isPredictionsClosed && fixtures && fixtures.length > 0 && (
+            {openFixtures.length > 0 && (
               <div className="mt-6 text-center">
                 <Button
                   size="lg"
@@ -818,7 +835,7 @@ const PredictionsPage: React.FC = () => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {!revealedPredictions?.revealed ? (
+            {!revealedPredictions?.revealedFixtureIds?.length && !revealedPredictions?.revealed ? (
               <div className="designed-empty-state">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
                   <div className="designed-empty-icon">
@@ -826,7 +843,7 @@ const PredictionsPage: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-xl font-black text-foreground">Other predictions are hidden</h3>
-                    <p className="text-sm text-muted-foreground">Everyone's picks unlock fixture-by-fixture after the deadline.</p>
+                    <p className="text-sm text-muted-foreground">Everyone's picks unlock fixture-by-fixture after each cutoff.</p>
                   </div>
                 </div>
               </div>
@@ -835,13 +852,14 @@ const PredictionsPage: React.FC = () => {
                 {fixtures.map((fixture) => {
                   const fixturePredictions = predictionsByFixture.get(fixture.id) || [];
                   const communityStats = communityScoreStatsByFixture.get(fixture.id) || [];
+                  const communityRevealed = !!revealedPredictions?.revealedFixtureIds?.includes(fixture.id) || !!revealedPredictions?.revealed;
                   return (
                     <div key={fixture.id} className="rounded-[1.25rem] border border-white/60 bg-white/45 p-4">
                       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                         <p className="font-black text-foreground">{fixture.homeTeam.name} vs {fixture.awayTeam.name}</p>
-                        <Badge variant="secondary">{fixturePredictions.length} picks</Badge>
+                        <Badge variant="secondary">{communityRevealed ? `${fixturePredictions.length} picks` : 'Hidden'}</Badge>
                       </div>
-                      {communityStats.length > 0 ? (
+                      {communityRevealed && communityStats.length > 0 ? (
                         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                           {communityStats.map((stat) => (
                             <div key={stat.score} className="rounded-2xl bg-white/55 px-3 py-2">
@@ -856,7 +874,9 @@ const PredictionsPage: React.FC = () => {
                             </div>
                           ))}
                         </div>
-                      ) : null}
+                      ) : communityRevealed ? null : (
+                        <p className="text-sm font-semibold text-muted-foreground">Picks are hidden until this fixture locks.</p>
+                      )}
                     </div>
                   );
                 })}

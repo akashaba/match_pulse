@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { getFixtureKickoffTime, isFixturePredictionOpen } from '../lib/predictionDeadlines';
 
 const clampScore = (value: number) => Math.max(0, Math.min(99, Number.isFinite(value) ? value : 0));
 
@@ -37,6 +38,7 @@ const LeagueManagePage: React.FC = () => {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [claimLinks, setClaimLinks] = useState<Record<number, string>>({});
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   const { data: league, isLoading } = useQuery({
     queryKey: ['league', id],
@@ -70,6 +72,8 @@ const LeagueManagePage: React.FC = () => {
     queryFn: () => h2hApi.getAllMatchupsForMatchday(id, selectedMatchdayId!),
     enabled: !!canManage && !!selectedMatchdayId && !!(league?.h2hLeaderboardEnabled || league?.h2hKnockoutEnabled),
   });
+  const selectedMatchday = matchdays.find((matchday) => matchday.id === selectedMatchdayId);
+  const openFixtures = fixtures.filter((fixture) => isFixturePredictionOpen(fixture, selectedMatchday, currentTime));
 
   useEffect(() => {
     if (!memberPredictions) return;
@@ -80,6 +84,11 @@ const LeagueManagePage: React.FC = () => {
     setScores(next);
     setJokerFixtureId(memberPredictions.find((prediction) => prediction.isJoker)?.fixtureId ?? null);
   }, [memberPredictions]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setCurrentTime(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const addMemberMutation = useMutation({
     mutationFn: () => leagueManagementApi.addMember(id, mode === 'registered'
@@ -102,7 +111,7 @@ const LeagueManagePage: React.FC = () => {
       id,
       selectedMatchdayId!,
       selectedMemberId!,
-      fixtures.map((fixture) => ({
+      openFixtures.map((fixture) => ({
         fixtureId: fixture.id,
         predictedHomeScore: scores[fixture.id]?.home ?? 0,
         predictedAwayScore: scores[fixture.id]?.away ?? 0,
@@ -135,8 +144,6 @@ const LeagueManagePage: React.FC = () => {
   if (!league) return <Navigate to="/leagues" replace />;
   if (!canManage) return <Navigate to={`/leagues/${id}`} replace />;
 
-  const selectedMatchday = matchdays.find((matchday) => matchday.id === selectedMatchdayId);
-  const predictionsOpen = selectedMatchday?.predictionsOpen === true;
   const selectableUsers = users.filter((candidate) => !league.members.some((member) => member.id === candidate.id));
 
   const updateScore = (fixtureId: number, side: 'home' | 'away', value: number) => {
@@ -219,28 +226,33 @@ const LeagueManagePage: React.FC = () => {
           <CardContent className="space-y-5">
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2"><Label>Member</Label><Select value={selectedMemberId ? String(selectedMemberId) : ''} onValueChange={(value) => { resetPredictionSelection(); setSelectedMemberId(Number(value)); }}><SelectTrigger><SelectValue placeholder="Select member" /></SelectTrigger><SelectContent>{league.members.map((member) => <SelectItem key={member.id} value={String(member.id)}>{member.username}{member.isGuest ? ' (guest)' : ''}</SelectItem>)}</SelectContent></Select></div>
-              <div className="space-y-2"><Label>Gameweek</Label><Select value={selectedMatchdayId ? String(selectedMatchdayId) : ''} onValueChange={(value) => { resetPredictionSelection(); setSelectedMatchdayId(Number(value)); }}><SelectTrigger><SelectValue placeholder="Select gameweek" /></SelectTrigger><SelectContent>{matchdays.map((matchday) => <SelectItem key={matchday.id} value={String(matchday.id)}>{matchday.name}{matchday.predictionsOpen ? '' : ' (closed)'}</SelectItem>)}</SelectContent></Select></div>
+              <div className="space-y-2"><Label>Gameweek</Label><Select value={selectedMatchdayId ? String(selectedMatchdayId) : ''} onValueChange={(value) => { resetPredictionSelection(); setSelectedMatchdayId(Number(value)); }}><SelectTrigger><SelectValue placeholder="Select gameweek" /></SelectTrigger><SelectContent>{matchdays.map((matchday) => <SelectItem key={matchday.id} value={String(matchday.id)}>{matchday.name}</SelectItem>)}</SelectContent></Select></div>
             </div>
 
-            {selectedMatchdayId && !predictionsOpen && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-700">Predictions are closed. Existing predictions are view-only.</div>}
-            {selectedMemberId && selectedMatchdayId && fixtures.map((fixture) => (
+            {selectedMatchdayId && fixtures.length > 0 && openFixtures.length === 0 && <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-700">No fixtures are currently open. Existing predictions are view-only.</div>}
+            {selectedMemberId && selectedMatchdayId && fixtures.map((fixture) => {
+              const fixtureOpen = isFixturePredictionOpen(fixture, selectedMatchday, currentTime);
+              const fixtureKickoffTime = getFixtureKickoffTime(fixture, selectedMatchday);
+              return (
               <div key={fixture.id} className={`fixture-strip rounded-xl p-4 ${jokerFixtureId === fixture.id ? 'ring-2 ring-amber-400' : ''}`}>
                 <div className="grid items-center gap-4 sm:grid-cols-[1fr_auto_1fr]">
                   <span className="text-center font-black sm:text-right">{fixture.homeTeam.name}</span>
                   <div className="flex items-center gap-2">
-                    <Input type="number" min={0} max={99} disabled={!predictionsOpen} className="w-20 text-center text-lg font-black" value={scores[fixture.id]?.home ?? 0} onChange={(event) => updateScore(fixture.id, 'home', Number(event.target.value))} />
+                    <Input type="number" min={0} max={99} disabled={!fixtureOpen} className="w-20 text-center text-lg font-black" value={scores[fixture.id]?.home ?? 0} onChange={(event) => updateScore(fixture.id, 'home', Number(event.target.value))} />
                     <span className="font-black text-muted-foreground">VS</span>
-                    <Input type="number" min={0} max={99} disabled={!predictionsOpen} className="w-20 text-center text-lg font-black" value={scores[fixture.id]?.away ?? 0} onChange={(event) => updateScore(fixture.id, 'away', Number(event.target.value))} />
+                    <Input type="number" min={0} max={99} disabled={!fixtureOpen} className="w-20 text-center text-lg font-black" value={scores[fixture.id]?.away ?? 0} onChange={(event) => updateScore(fixture.id, 'away', Number(event.target.value))} />
                   </div>
                   <span className="text-center font-black sm:text-left">{fixture.awayTeam.name}</span>
                 </div>
-                <div className="mt-3 flex justify-center">
-                  <Button type="button" size="sm" variant={jokerFixtureId === fixture.id ? 'warning' : 'outline'} disabled={!predictionsOpen} onClick={() => setJokerFixtureId(jokerFixtureId === fixture.id ? null : fixture.id)} className="gap-1.5"><Star className="h-4 w-4" /> {jokerFixtureId === fixture.id ? 'Joker selected (2x)' : 'Use Joker'}</Button>
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                  <Badge variant={fixtureOpen ? 'secondary' : 'warning'}>{fixtureOpen ? 'Open' : 'Locked'}</Badge>
+                  {fixtureKickoffTime && <Badge variant="secondary">{new Date(fixtureKickoffTime).toLocaleString()}</Badge>}
+                  <Button type="button" size="sm" variant={jokerFixtureId === fixture.id ? 'warning' : 'outline'} disabled={!fixtureOpen} onClick={() => setJokerFixtureId(jokerFixtureId === fixture.id ? null : fixture.id)} className="gap-1.5"><Star className="h-4 w-4" /> {jokerFixtureId === fixture.id ? 'Joker selected (2x)' : 'Use Joker'}</Button>
                 </div>
               </div>
-            ))}
+            );})}
             {selectedMemberId && selectedMatchdayId && fixtures.length > 0 && (
-              <Button className="gap-2" onClick={() => savePredictionsMutation.mutate()} disabled={!predictionsOpen || savePredictionsMutation.isPending}><Save className="h-4 w-4" /> Save all predictions</Button>
+              <Button className="gap-2" onClick={() => savePredictionsMutation.mutate()} disabled={!openFixtures.length || savePredictionsMutation.isPending}><Save className="h-4 w-4" /> Save open predictions</Button>
             )}
             {!selectedMemberId || !selectedMatchdayId ? <p className="text-muted-foreground">Select a member and gameweek to load fixtures.</p> : null}
             {savePredictionsMutation.isSuccess && <p className="flex items-center gap-2 text-sm font-bold text-primary"><CheckCircle className="h-4 w-4" /> Predictions saved</p>}

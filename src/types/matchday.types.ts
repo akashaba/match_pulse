@@ -15,7 +15,6 @@ export interface CreateMatchdayRequest {
   number: number;
   divisionId: number;
   startDate: string;
-  endDate?: string;
 }
 
 export interface Team {

@@ -24,6 +24,7 @@ import { standingsApi } from '../api/standingsApi';
 import { League } from '../types/league.types';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { isFixturePredictionOpen } from '../lib/predictionDeadlines';
 
 const formatFixtureDate = (value?: string) => {
   if (!value) return 'Date TBC';
@@ -71,6 +72,7 @@ const DashboardPage: React.FC = () => {
   const { user, isAdmin } = useAuth();
   const [searchParams] = useSearchParams();
   const [selectedLeagueId, setSelectedLeagueId] = useState<number | null>(null);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   const { data: leagues = [], isLoading: leaguesLoading } = useQuery({
     queryKey: ['dashboard-leagues'],
@@ -82,6 +84,11 @@ const DashboardPage: React.FC = () => {
       setSelectedLeagueId(leagues[0].id);
     }
   }, [leagues, selectedLeagueId]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setCurrentTime(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const selectedLeague = useMemo(
     () => leagues.find((league) => league.id === selectedLeagueId) || leagues[0],
@@ -159,7 +166,8 @@ const DashboardPage: React.FC = () => {
   const primaryFixture = pendingFixtures[0] || orderedNextMatchdayFixtures[0];
   const primaryFixtureMatchday = pendingFixtures.length ? activeMatchday : nextMatchday;
   const predictionsByFixture = new Map(userPredictions.map((prediction) => [prediction.fixtureId, prediction]));
-  const visiblePredictionFixtures = activeMatchday?.predictionsOpen
+  const activeOpenFixtures = orderedFixtures.filter((fixture) => isFixturePredictionOpen(fixture, activeMatchday, currentTime));
+  const visiblePredictionFixtures = activeOpenFixtures.length
     ? orderedFixtures
     : orderedFixtures.filter((fixture) => predictionsByFixture.has(fixture.id));
   const topFixtures = visiblePredictionFixtures.slice(0, 3);
@@ -169,7 +177,7 @@ const DashboardPage: React.FC = () => {
   const userStanding = userRank > 0 ? standings[userRank - 1] : undefined;
   const pointsBehindLeader = leader && userStanding ? Math.max(0, leader.totalPoints - userStanding.totalPoints) : 0;
   const completedFixtures = fixtures.filter((fixture) => fixture.status === 'COMPLETED').length;
-  const openPredictionCount = fixtures.filter((fixture) => fixture.status !== 'COMPLETED' && activeMatchday?.predictionsOpen).length;
+  const openPredictionCount = activeOpenFixtures.length;
   const showOnboarding = !leaguesLoading && leagues.length === 0;
   const isWelcome = searchParams.get('welcome') === '1';
 
@@ -321,7 +329,7 @@ const DashboardPage: React.FC = () => {
                       </div>
                     )}
 
-                    {selectedLeague && activeMatchday && activeMatchday.predictionsOpen && fixture.status !== 'COMPLETED' && (
+                    {selectedLeague && activeMatchday && isFixturePredictionOpen(fixture, activeMatchday, currentTime) && fixture.status !== 'COMPLETED' && (
                       <Link to={`/leagues/${selectedLeague.id}/matchdays/${activeMatchday.id}`}>
                         <Button className="mt-4 w-full rounded-full">
                           {prediction ? 'Edit Prediction' : 'Make Prediction'}
@@ -333,8 +341,8 @@ const DashboardPage: React.FC = () => {
               );
               }) : (
                 <div className="rounded-[1.35rem] border border-white/55 bg-white/35 p-8 text-center text-sm text-slate-500">
-                  {activeMatchday && !activeMatchday.predictionsOpen
-                    ? 'Predictions are closed. You did not submit any picks for this matchday.'
+                  {activeMatchday && !openPredictionCount
+                    ? 'No fixtures are currently open. You did not submit any visible picks for this matchday.'
                     : 'No fixtures available for the selected matchday.'}
                 </div>
               )}

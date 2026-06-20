@@ -33,6 +33,7 @@ const defaultScoringRules = {
   wrongPrediction: 0,
   jokerMultiplier: 2,
 };
+const fixturePredictionLockMs = 5 * 60 * 1000;
 
 function assetUrl(path?: string | null) {
   if (!path || !process.env.NEXT_PUBLIC_SUPABASE_URL) return undefined;
@@ -167,8 +168,28 @@ function teamDto(row: any) {
 function matchdayDto(row: any) {
   const now = Date.now();
   const start = new Date(row.start_date).getTime();
-  const deadline = row.end_date ? new Date(row.end_date).getTime() : start;
-  const computedStatus = row.status === 'COMPLETED' ? 'COMPLETED' : now < start ? 'UPCOMING' : now < deadline ? 'IN_PROGRESS' : 'COMPLETED';
+  const fixtures = row.fixtures || [];
+  const fixtureStarted = (fixture: any) => {
+    if (fixture.status === 'COMPLETED') return true;
+    const kickoffAt = fixture.kickoff_at ?? row.start_date;
+    const kickoffTime = kickoffAt ? new Date(kickoffAt).getTime() : NaN;
+    return Number.isFinite(kickoffTime) && now >= kickoffTime;
+  };
+  const fixtureOpen = (fixture: any) => {
+    const kickoffAt = fixture.kickoff_at ?? row.start_date;
+    const kickoffTime = kickoffAt ? new Date(kickoffAt).getTime() : NaN;
+    return fixture.status !== 'COMPLETED'
+      && row.status !== 'COMPLETED'
+      && Number.isFinite(kickoffTime)
+      && now < kickoffTime - fixturePredictionLockMs;
+  };
+  const allFixturesStarted = fixtures.length > 0 && fixtures.every(fixtureStarted);
+  const anyFixtureStarted = fixtures.some(fixtureStarted);
+  const computedStatus = row.status === 'COMPLETED' || allFixturesStarted
+    ? 'COMPLETED'
+    : now < start && !anyFixtureStarted
+      ? 'UPCOMING'
+      : 'IN_PROGRESS';
 
   return {
     id: row.id,
@@ -179,11 +200,31 @@ function matchdayDto(row: any) {
     startDate: row.start_date,
     endDate: row.end_date ?? undefined,
     computedStatus,
-    predictionsOpen: row.status !== 'COMPLETED' && now < deadline,
+    predictionsOpen: fixtures.length > 0 ? fixtures.some(fixtureOpen) : row.status !== 'COMPLETED',
   };
 }
 
+function fixturePredictionDeadline(row: any) {
+  const kickoffAt = row.kickoff_at ?? row.matchday?.start_date;
+  if (!kickoffAt) return null;
+  const kickoffTime = new Date(kickoffAt).getTime();
+  return Number.isFinite(kickoffTime) ? kickoffTime - fixturePredictionLockMs : null;
+}
+
+function fixturePredictionsOpen(row: any, now = Date.now()) {
+  const deadline = fixturePredictionDeadline(row);
+  return row.status !== 'COMPLETED'
+    && row.matchday?.status !== 'COMPLETED'
+    && deadline !== null
+    && now < deadline;
+}
+
+function fixturePredictionsRevealed(row: any, now = Date.now()) {
+  return row.status === 'COMPLETED' || !fixturePredictionsOpen(row, now);
+}
+
 function fixtureDto(row: any) {
+  const predictionDeadline = fixturePredictionDeadline(row);
   return {
     id: row.id,
     matchdayId: row.matchday_id,
@@ -193,6 +234,8 @@ function fixtureDto(row: any) {
     homeScore: row.home_score,
     awayScore: row.away_score,
     kickoffAt: row.kickoff_at ?? undefined,
+    predictionDeadline: predictionDeadline ? new Date(predictionDeadline).toISOString() : undefined,
+    predictionsOpen: fixturePredictionsOpen(row),
     displayOrder: row.display_order ?? undefined,
     status: row.status,
   };
@@ -746,32 +789,38 @@ async function seedDeadlineNotifications(supabase: ReturnType<typeof getSupabase
       .from('matchdays')
       .select('*')
       .eq('division_id', league.division_id);
-    const active = (matchdays || []).filter((matchday: any) => {
-      const dto = matchdayDto(matchday);
-      const deadline = new Date(matchday.end_date || matchday.start_date).getTime();
-      return dto.predictionsOpen && deadline > now && deadline <= soon;
-    });
+    const active = (matchdays || []).filter((matchday: any) => matchday.status !== 'COMPLETED');
 
     await Promise.all(active.map(async (matchday: any) => {
       const [{ data: fixtures }, { data: predictions }] = await Promise.all([
-        supabase.from('fixtures').select('id').eq('matchday_id', matchday.id),
+        supabase.from('fixtures').select('*, matchday:matchdays(*)').eq('matchday_id', matchday.id),
         supabase
           .from('predictions')
-          .select('id, fixture:fixtures(matchday_id)')
+          .select('id, fixture_id, fixture:fixtures(matchday_id)')
           .eq('league_id', league.id)
           .eq('user_id', userId),
       ]);
-      const fixtureCount = fixtures?.length || 0;
-      const predictedCount = (predictions || []).filter((prediction: any) => prediction.fixture?.matchday_id === matchday.id).length;
-      if (fixtureCount > 0 && predictedCount >= fixtureCount) return;
+      const predictedFixtureIds = new Set((predictions || [])
+        .filter((prediction: any) => prediction.fixture?.matchday_id === matchday.id)
+        .map((prediction: any) => prediction.fixture_id));
+      const unpredictedClosingSoon = (fixtures || []).filter((fixture: any) => {
+        const deadline = fixturePredictionDeadline(fixture);
+        return fixturePredictionsOpen(fixture, now)
+          && deadline !== null
+          && deadline > now
+          && deadline <= soon
+          && !predictedFixtureIds.has(fixture.id);
+      });
+      if (!unpredictedClosingSoon.length) return;
       const matchdayName = formatMatchdayName(matchday);
+      const remainingCount = unpredictedClosingSoon.length;
       await addNotification(supabase, {
         userId,
         leagueId: league.id,
         matchdayId: matchday.id,
         type: 'deadline',
         title: 'Prediction deadline approaching',
-        message: `${matchdayName} locks soon in ${league.name}. You still have ${Math.max(0, fixtureCount - predictedCount)} prediction${fixtureCount - predictedCount === 1 ? '' : 's'} to make.`,
+        message: `${matchdayName} has ${remainingCount} fixture${remainingCount === 1 ? '' : 's'} locking soon in ${league.name}.`,
         uniqueKey: `deadline:${league.id}:${matchday.id}`,
       });
     }));
@@ -1293,8 +1342,8 @@ async function filteredStandings(supabase: ReturnType<typeof getSupabaseAdmin>, 
 }
 
 async function matchdaySummary(supabase: ReturnType<typeof getSupabaseAdmin>, leagueId: number, matchdayId: number) {
-  const { data: matchday } = await supabase.from('matchdays').select('*').eq('id', matchdayId).single();
-  const revealed = matchday ? !matchdayDto(matchday).predictionsOpen : false;
+  const { data: fixturesForReveal } = await supabase.from('fixtures').select('*, matchday:matchdays(*)').eq('matchday_id', matchdayId);
+  const revealed = !!fixturesForReveal?.length && fixturesForReveal.every((fixture: any) => fixturePredictionsRevealed(fixture));
 
   if (!revealed) {
     return {
@@ -1575,14 +1624,14 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
       return json((data || []).map(teamDto));
     }
     if (path[2] === 'matchdays' && request.method === 'GET') {
-      const { data } = await supabase.from('matchdays').select('*, division:divisions(id,name,code,logo_url,logo_path)').eq('division_id', asInt(path[1])).order('number');
+      const { data } = await supabase.from('matchdays').select('*, division:divisions(id,name,code,logo_url,logo_path), fixtures(id,status,kickoff_at)').eq('division_id', asInt(path[1])).order('number');
       return json((data || []).map(matchdayDto));
     }
   }
 
   if (path[0] === 'matchdays') {
     if (path.length === 2 && request.method === 'GET') {
-      const { data } = await supabase.from('matchdays').select('*, division:divisions(id,name,code,logo_url,logo_path)').eq('id', asInt(path[1])).single();
+      const { data } = await supabase.from('matchdays').select('*, division:divisions(id,name,code,logo_url,logo_path), fixtures(id,status,kickoff_at)').eq('id', asInt(path[1])).single();
       return data ? json(matchdayDto(data)) : fail('Matchday not found', 404);
     }
     if (path[2] === 'fixtures' && request.method === 'GET') {
@@ -1725,14 +1774,16 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
       if (request.method === 'POST') {
         const { data: matchday } = await supabase.from('matchdays').select('*').eq('id', matchdayId).single();
         if (!matchday) return fail('Matchday not found', 404);
-        if (!matchdayDto(matchday).predictionsOpen) return fail('Predictions are closed for this matchday and cannot be added or edited', 400);
 
         const rows = Array.isArray(body?.predictions) ? body.predictions : [];
         const saved = [];
         const rules = await scoringRules(supabase);
         for (const row of rows) {
-          const { data: fixture } = await supabase.from('fixtures').select('*').eq('id', row.fixtureId).eq('matchday_id', matchdayId).single();
+          const { data: fixture } = await supabase.from('fixtures').select('*, matchday:matchdays(*)').eq('id', row.fixtureId).eq('matchday_id', matchdayId).single();
           if (!fixture) return fail(`Fixture ${row.fixtureId} not found`, 404);
+          if (!fixturePredictionsOpen(fixture)) {
+            return fail('Predictions are closed for one or more selected fixtures', 400);
+          }
           const prediction = {
             predicted_home_score: Number(row.predictedHomeScore),
             predicted_away_score: Number(row.predictedAwayScore),
@@ -1902,7 +1953,7 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
     if (request.method === 'POST') {
       const { data: fixture } = await supabase.from('fixtures').select('*, matchday:matchdays(*)').eq('id', body.fixtureId).single();
       if (!fixture) return fail('Fixture not found', 404);
-      if (!matchdayDto(fixture.matchday).predictionsOpen) return fail('Predictions are closed for this fixture', 400);
+      if (!fixturePredictionsOpen(fixture)) return fail('Predictions are closed for this fixture', 400);
 
       const isJoker = body.isJoker === true;
       if (isJoker) {
@@ -1937,17 +1988,27 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
       const matchdayId = asInt(path[2]);
       const leagueId = asInt(path[4]);
       const wantsAll = path[5] === 'all';
-      const { data: matchday } = await supabase.from('matchdays').select('*').eq('id', matchdayId).single();
-      const revealOpen = matchday ? !matchdayDto(matchday).predictionsOpen : false;
+      const { data: fixtures } = await supabase.from('fixtures').select('*, matchday:matchdays(*)').eq('matchday_id', matchdayId);
+      const now = Date.now();
+      const revealedFixtureIds = new Set((fixtures || [])
+        .filter((fixture: any) => fixturePredictionsRevealed(fixture, now))
+        .map((fixture: any) => fixture.id));
+      const allRevealed = !!fixtures?.length && fixtures.every((fixture: any) => fixturePredictionsRevealed(fixture, now));
+      const canSeeAll = requireRole(user, ['ADMIN', 'SUPER_ADMIN']);
       let query = supabase
         .from('predictions')
         .select('*, user:users(*), fixture:fixtures(matchday_id)')
         .eq('league_id', leagueId);
-      if (!wantsAll || (!revealOpen && !requireRole(user, ['ADMIN', 'SUPER_ADMIN']))) query = query.eq('user_id', user.id);
+      if (!wantsAll) query = query.eq('user_id', user.id);
       const { data } = await query;
+      const predictions = (data || [])
+        .filter((p: any) => p.fixture?.matchday_id === matchdayId)
+        .filter((p: any) => !wantsAll || canSeeAll || revealedFixtureIds.has(p.fixture_id))
+        .map(predictionDto);
       return json({
-        revealed: wantsAll ? revealOpen || requireRole(user, ['ADMIN', 'SUPER_ADMIN']) : true,
-        predictions: (data || []).filter((p: any) => p.fixture?.matchday_id === matchdayId).map(predictionDto),
+        revealed: wantsAll ? allRevealed || canSeeAll : true,
+        revealedFixtureIds: wantsAll ? (canSeeAll ? (fixtures || []).map((fixture: any) => fixture.id) : [...revealedFixtureIds]) : undefined,
+        predictions,
       });
     }
 
@@ -2037,9 +2098,6 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
 
       const { data: matchday } = await supabase.from('matchdays').select('*').eq('id', matchdayId).single();
       if (!matchday) return fail('Matchday not found', 404);
-      if (!matchdayDto(matchday).predictionsOpen) {
-        return fail('Predictions are closed for this matchday and cannot be added or edited', 400);
-      }
 
       const { data: member } = await supabase
         .from('league_members')
@@ -2058,6 +2116,9 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
           .eq('matchday_id', matchdayId)
           .single();
         if (fixtureError || !fixture) return fail(`Fixture ${row.fixtureId} not found`, 404);
+        if (!fixturePredictionsOpen(fixture)) {
+          return fail('Predictions are closed for one or more selected fixtures', 400);
+        }
 
         const pred = {
           predicted_home_score: Number(row.predictedHomeScore),
@@ -2161,12 +2222,12 @@ async function handleRequest(request: NextRequest, params: { path?: string[] }) 
       return json({ message: 'Team deleted' });
     }
     if (path[1] === 'matchdays' && request.method === 'POST') {
-      const { data, error } = await supabase.from('matchdays').insert({ name: body.name, number: body.number, division_id: body.divisionId, start_date: body.startDate, end_date: body.endDate || null }).select('*, division:divisions(id,name,code,logo_url,logo_path)').single();
+      const { data, error } = await supabase.from('matchdays').insert({ name: body.name, number: body.number, division_id: body.divisionId, start_date: body.startDate, end_date: null }).select('*, division:divisions(id,name,code,logo_url,logo_path), fixtures(id,status,kickoff_at)').single();
       return error ? fail(error.message) : json(matchdayDto(data), 201);
     }
     if (path[1] === 'matchdays' && path[3] === 'status' && request.method === 'PUT') {
       const status = request.nextUrl.searchParams.get('status');
-      const { data } = await supabase.from('matchdays').update({ status }).eq('id', asInt(path[2])).select('*, division:divisions(id,name,code,logo_url,logo_path)').single();
+      const { data } = await supabase.from('matchdays').update({ status }).eq('id', asInt(path[2])).select('*, division:divisions(id,name,code,logo_url,logo_path), fixtures(id,status,kickoff_at)').single();
       return json(matchdayDto(data));
     }
     if (path[1] === 'fixtures' && request.method === 'POST') {

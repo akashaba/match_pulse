@@ -18,6 +18,8 @@ export interface Fixture {
   homeScore?: number;
   awayScore?: number;
   kickoffAt?: string;
+  predictionDeadline?: string;
+  predictionsOpen?: boolean;
   displayOrder?: number;
   status: 'SCHEDULED' | 'COMPLETED';
 }

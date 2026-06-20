@@ -10,6 +10,7 @@ export interface PredictionInput {
 
 export interface MatchdayPredictionsResponse {
   revealed: boolean;
+  revealedFixtureIds?: number[];
   predictions: Prediction[];
 }
 
